@@ -17,11 +17,12 @@ exec "${PYTHON_BIN}" main.py \
   --data_root_dir "${PROJECT_DIR}/data/tcga_coadread/clam_20x_resnet50" \
   --label_file "${PROJECT_DIR}/datasets_csv/metadata/tcga_coadread.csv" \
   --omics_dir "${PROJECT_DIR}/datasets_csv/raw_rna_data/combine/coadread" \
-  --results_dir "${PROJECT_DIR}/results_coadread" \
+  --results_dir "${PROJECT_DIR}/results_coadread_released" \
   --batch_size 1 \
   --lr 0.0001 \
   --opt adam \
   --reg 0.00001 \
+  --seed 1 \
   --alpha_surv 0.5 \
   --weighted_sample \
   --max_epochs 30 \
@@ -33,4 +34,6 @@ exec "${PYTHON_BIN}" main.py \
   --num_patches 4096 \
   --wsi_projection_dim 256 \
   --fusion concat \
+  --lr_scheduler cosine \
+  --warmup_epochs 1 \
   "$@"

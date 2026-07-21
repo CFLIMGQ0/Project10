@@ -58,46 +58,56 @@ class GraphFusion(nn.Module):
         
         return cross_token
 class AlignFusion(nn.Module):
+    """Interactive alignment fusion from the released MRePath repository."""
+
     def __init__(self, embedding_dim: int, num_heads: int, mlp_dim=512, num_pathways=6):
         super().__init__()
         self.num_pathways = num_pathways
-        self.gene_self_attn = Attention(embedding_dim, num_heads)
-        self.gene_self_norm = nn.LayerNorm(embedding_dim)
-        self.pathology_guided_gene_attn = Attention(embedding_dim, num_heads)
-        self.gene_cross_norm = nn.LayerNorm(embedding_dim)
-        self.gene_guided_pathology_attn = Attention(embedding_dim, num_heads)
-        self.pathology_cross_norm = nn.LayerNorm(embedding_dim)
 
-    def forward(self, pathology, genomics):
-        """
-        Interactive Alignment Fusion from MRePath Eq. (10)-(11).
+        self.self_attn = Attention(embedding_dim, num_heads)
+        self.norm1 = nn.LayerNorm(embedding_dim)
 
-        Genomic tokens first interact through self-attention. Pathology then
-        guides genomic refinement, after which the refined genomic tokens guide
-        pathology. Both cross-attention operations use residual connections.
-        """
-        if pathology.ndim != 3 or genomics.ndim != 3:
-            raise ValueError("pathology and genomics must be [batch, tokens, dim]")
-        if genomics.shape[1] != self.num_pathways:
-            raise ValueError(
-                f"expected {self.num_pathways} genomic groups, got {genomics.shape[1]}"
-            )
+        self.cross_attn_pathway_to_histology = Attention(embedding_dim, num_heads)
+        self.norm2 = nn.LayerNorm(embedding_dim)
 
-        genomic_self = self.gene_self_norm(
-            genomics + self.gene_self_attn(genomics, genomics, genomics)
+        self.mlp = MLPBlock(embedding_dim, mlp_dim)
+        self.norm3 = nn.LayerNorm(embedding_dim)
+
+        self.cross_attn_histology_to_pathway = Attention(embedding_dim, num_heads)
+        self.norm4 = nn.LayerNorm(embedding_dim)
+
+        self.final_cross_attn = Attention(embedding_dim, num_heads)
+        self.final_norm = nn.LayerNorm(embedding_dim)
+
+    def forward(self, token):
+        """Fuse a token sequence containing genomics first, then pathology."""
+        keys_p = token[:, self.num_pathways:, :]
+        queries_p = token[:, :self.num_pathways, :]
+
+        queries = queries_p + self.self_attn(queries_p, queries_p, queries_p)
+        # Preserve the released forward path: norm1 is evaluated but its
+        # result is not fed to the first cross-attention operation.
+        _ = self.norm1(queries)
+
+        attn_out = self.cross_attn_pathway_to_histology(
+            q=queries, k=keys_p, v=keys_p
+        )
+        queries = self.norm2(queries + attn_out)
+
+        queries = self.norm3(queries + self.mlp(queries))
+
+        attn_out = self.cross_attn_histology_to_pathway(
+            q=keys_p, k=queries, v=queries
+        )
+        keys = self.norm4(keys_p + attn_out)
+
+        keys = keys + keys_p
+        queries = queries + queries_p
+        queries = self.final_norm(
+            queries + self.final_cross_attn(q=queries, k=keys, v=keys)
         )
 
-        genomic_cross = self.pathology_guided_gene_attn(
-            q=genomic_self, k=pathology, v=pathology
-        )
-        genomic_fused = self.gene_cross_norm(genomic_self + genomic_cross)
-
-        pathology_cross = self.gene_guided_pathology_attn(
-            q=pathology, k=genomic_fused, v=genomic_fused
-        )
-        pathology_fused = self.pathology_cross_norm(pathology + pathology_cross)
-
-        return pathology_fused, genomic_fused
+        return torch.cat((keys, queries), dim=-2)
 class MLPBlock(nn.Module):
     def __init__(
         self,
