@@ -485,7 +485,8 @@ def _get_split_loader(args, split_dataset, training = False, testing = False, we
     
     """
 
-    kwargs = {'num_workers': 8} if device.type == "cuda" else {}
+    num_workers = max(0, int(getattr(args, "num_workers", 0)))
+    kwargs = {'num_workers': num_workers}
     
     if args.modality in ["omics", "snn", "mlp_per_path"]:
         collate_fn = _collate_omics

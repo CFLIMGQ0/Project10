@@ -49,6 +49,8 @@ def _process_args():
     parser.add_argument('--reg_type', type=str, default="None", help="regularization type [None, L1, L2]")
     parser.add_argument('--weighted_sample', action='store_true', default=False, help='enable weighted sampling')
     parser.add_argument('--batch_size', type=int, default=1, help='batch_size')
+    parser.add_argument('--num_workers', type=int, default=0,
+                        help='data loader workers; use 0 for stable WSL/NTFS graph loading')
     parser.add_argument('--bag_loss', type=str, choices=['ce_surv', "nll_surv", "nll_rank_surv", "rank_surv", "cox_surv"], default='ce',
                         help='survival loss function (default: ce)')
     parser.add_argument('--alpha_surv', type=float, default=0.0, help='weight given to uncensored patients')

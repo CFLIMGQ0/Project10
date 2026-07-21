@@ -19,6 +19,7 @@ exec "${PYTHON_BIN}" main.py \
   --omics_dir "${PROJECT_DIR}/datasets_csv/raw_rna_data/combine/coadread" \
   --results_dir "${PROJECT_DIR}/results_coadread_released" \
   --batch_size 1 \
+  --num_workers 0 \
   --lr 0.0001 \
   --opt adam \
   --reg 0.00001 \

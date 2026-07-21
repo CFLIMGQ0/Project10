@@ -54,17 +54,25 @@ def main(args):
         print("Saving results...")
         _save_pkl(filename, results)
 
-    summary = pd.DataFrame({
-        'fold': folds,
-        'val_cindex': all_val_cindex,
-        'val_cindex_ipcw': all_val_cindex_ipcw,
-        'val_brier_score': all_val_BS,
-        'val_integrated_brier_score': all_val_IBS,
-        'val_iauc': all_val_iauc,
-        'val_loss': all_val_loss,
-    })
-    summary.to_csv(os.path.join(args.results_dir, 'summary.csv'), index=False)
-    return summary
+        # Persist each fold immediately so a later fold failure does not erase
+        # metrics from folds that already finished.
+        summary_path = os.path.join(args.results_dir, 'summary.csv')
+        fold_summary = pd.DataFrame({
+            'fold': [i],
+            'val_cindex': [val_cindex],
+            'val_cindex_ipcw': [val_cindex_ipcw],
+            'val_brier_score': [val_BS],
+            'val_integrated_brier_score': [val_IBS],
+            'val_iauc': [val_iauc],
+            'val_loss': [total_loss],
+        })
+        if os.path.isfile(summary_path):
+            previous = pd.read_csv(summary_path)
+            previous = previous[previous['fold'] != i]
+            fold_summary = pd.concat([previous, fold_summary], ignore_index=True)
+        fold_summary.sort_values('fold').to_csv(summary_path, index=False)
+
+    return pd.read_csv(os.path.join(args.results_dir, 'summary.csv'))
 
 if __name__ == "__main__":
     start = timer()
