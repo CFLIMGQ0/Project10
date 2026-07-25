@@ -63,20 +63,24 @@ class Hnsw:
         indices, dist = self.index_.knnQuery(vector, k=topn)
         return indices
 
-def pt2graph(wsi_h5, radius=5):
+def pt2graph(wsi_h5, radius=5, spatial_space='l2', feature_space='cosinesimil'):
     from torch_geometric.data import Data as geomData
     from itertools import chain
     coords, features = np.array(wsi_h5['coords']), np.array(wsi_h5['features'])
     assert coords.shape[0] == features.shape[0]
     num_patches = coords.shape[0]
     
-    model = Hnsw(space='l2')
+    # Eq. (2): Euclidean distance in the spatial domain.
+    model = Hnsw(space=spatial_space)
     model.fit(coords)
     a = np.repeat(range(num_patches), radius-1)
     b = np.fromiter(chain(*[model.query(coords[v_idx], topn=radius)[1:] for v_idx in range(num_patches)]),dtype=int)
     edge_spatial = torch.Tensor(np.stack([a,b])).type(torch.LongTensor)
     
-    model = Hnsw(space='l2')
+    # Eq. (3): feature-space similarity.  The paper uses cosine similarity as
+    # its concrete example; nmslib's cosinesimil space returns nearest items by
+    # cosine distance.
+    model = Hnsw(space=feature_space)
     model.fit(features)
     a = np.repeat(range(num_patches), radius-1)
     b = np.fromiter(chain(*[model.query(features[v_idx], topn=radius)[1:] for v_idx in range(num_patches)]),dtype=int)
@@ -86,6 +90,9 @@ def pt2graph(wsi_h5, radius=5):
                  edge_index = edge_spatial,
                  edge_latent = edge_latent,
                  centroid = torch.Tensor(coords))
+    G.spatial_metric = spatial_space
+    G.feature_metric = feature_space
+    G.hyperedge_size = radius
     return G
 
 def createDir_h5toPyG(h5_path, save_path):

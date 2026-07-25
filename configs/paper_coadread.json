@@ -1,0 +1,65 @@
+{
+  "paper": {
+    "title": "Multimodal Cancer Survival Analysis via Hypergraph Learning with Cross-Modality Rebalance",
+    "arxiv": "2505.11997",
+    "official_repository": "https://github.com/MCPathology/MRePath",
+    "official_commit": "e3c133b0beb5ded80426afbe49ab41f1003a4ed5"
+  },
+  "cohort": {
+    "study": "tcga_coadread",
+    "paper_cases": 298,
+    "folds": 5,
+    "train_validation_ratio": "4:1",
+    "label": "survival_months_dss",
+    "survival_bins": 4,
+    "paper_cindex_mean": 0.808,
+    "paper_cindex_std": 0.058,
+    "paper_fold_cindex_rounded": [
+      0.850,
+      0.750,
+      0.875,
+      0.818,
+      0.746
+    ]
+  },
+  "pathology": {
+    "magnification": "20x",
+    "patch_size": 256,
+    "patch_overlap": 0,
+    "encoder": "truncated_resnet50",
+    "feature_dimension": 1024,
+    "patches_per_case": 4096,
+    "train_patch_sampling": "random",
+    "validation_patch_sampling": "deterministic"
+  },
+  "hypergraph": {
+    "topological_metric": "l2",
+    "feature_metric": "cosine",
+    "hyperedge_size": 9,
+    "convolution": "general_sheaf",
+    "layers": 3
+  },
+  "genomics": {
+    "groups": 6,
+    "paper_modalities": [
+      "RNA-seq",
+      "CNV",
+      "SNV"
+    ],
+    "released_matrix": "RNA-only"
+  },
+  "training": {
+    "optimizer": "adam",
+    "learning_rate": 0.0001,
+    "weight_decay": 0.00001,
+    "loss": "nll_surv",
+    "alpha_surv": 0.0,
+    "epochs": 30,
+    "weighted_sampling": false,
+    "scheduler": "constant",
+    "warmup_epochs": 0,
+    "checkpoint_selection": "best",
+    "seed": 1,
+    "parallel_folds": false
+  }
+}

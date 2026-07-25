@@ -1012,7 +1012,7 @@ class MLP(nn.Module):
         for lin in self.lins:
             lin.reset_parameters()
         for normalization in self.normalizations:
-            if not (normalization.__class__.__name__ is 'Identity'):
+            if not isinstance(normalization, nn.Identity):
                 normalization.reset_parameters()
 
     def forward(self, x):
@@ -1058,9 +1058,9 @@ class HalfNLHconv(MessagePassing):
         if self.attention:
             self.prop.reset_parameters()
         else:
-            if not (self.f_enc.__class__.__name__ is 'Identity'):
+            if not isinstance(self.f_enc, nn.Identity):
                 self.f_enc.reset_parameters()
-            if not (self.f_dec.__class__.__name__ is 'Identity'):
+            if not isinstance(self.f_dec, nn.Identity):
                 self.f_dec.reset_parameters()
 #         self.bn.reset_parameters()
 
@@ -1096,4 +1096,3 @@ class HalfNLHconv(MessagePassing):
         if aggr is None:
             raise ValeuError("aggr was not passed!")
         return scatter(inputs, index, dim=self.node_dim, reduce=aggr)
-

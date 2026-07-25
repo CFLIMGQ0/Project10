@@ -1,50 +1,26 @@
-# MRePath reproduction profile
+# CO-READ reproduction quick start
 
-This project uses the model and interactive-alignment module layout released by
-`MCPathology/MRePath` at commit `e3c133b`. WSI preprocessing and resumable graph
-construction are local wrappers and do not alter the released graph algorithm
-(HNSW spatial/feature neighbours with radius 9).
+The canonical profile is defined in:
 
-## Paper experiment profile
+- `configs/paper_coadread.json` — machine-readable settings;
+- `docs/REPRODUCTION_CONTRACT.md` — paper/repository decisions and known
+  public-data limitations;
+- `scripts/audit_paper_coadread.py` — preflight validation;
+- `scripts/run_coadread.sh` — the only active CO-READ training entry point.
 
-The default CO-READ launcher follows the settings reported in the IJCAI 2025
-paper:
-
-- truncated ImageNet-pretrained ResNet50 patch features (1024 dimensions);
-- 4096 sampled patches per case;
-- five predefined patient-level folds, with a 4:1 train/validation split;
-- Adam, learning rate `1e-4`, weight decay `1e-5`;
-- cosine schedule with one warm-up epoch;
-- NLL survival loss with `alpha_surv=0.5`;
-- 30 epochs and seed 1.
-
-Run all five CO-READ folds with:
+Run the released-data reproduction sequentially with:
 
 ```bash
 bash scripts/run_coadread.sh
 ```
 
-Results are written below `results_coadread_released/`. The paper reports
-CO-READ C-index `0.808 +/- 0.058`; comparison must use the mean and sample
-standard deviation of all five folds, not the best individual fold.
+This invokes the paper profile: ResNet50 1024-D pathology features, 4096
+patches per case, spatial L2 and feature cosine hyperedges at `k=9`, three
+general-sheaf layers, dynamic modality weighting, interactive alignment
+fusion, Adam at `1e-4`, weight decay `1e-5`, NLL survival loss, and 30 epochs.
 
-## Necessary compatibility corrections
-
-The released repository contains a few contradictions with its own README and
-paper. This reproduction keeps the released model topology while applying only
-the corrections required for an executable and auditable experiment:
-
-- the pathology projection accepts the 1024-dimensional ResNet50 features used
-  by the released training command (the model file originally hard-coded 768);
-- Adam receives the paper's weight decay;
-- genomic rows are matched by TCGA case ID rather than relying on dataframe row
-  order;
-- graph loading is compatible with PyTorch 2.6 and graph node IDs are remapped
-  to the sampled feature order;
-- slides whose sampled nodes contain no surviving hyperedge fall back to their
-  projected pathology tokens instead of crashing;
-- every fold writes a stable best checkpoint and `summary.csv`.
-
-These compatibility changes leave the normal three-layer sheaf-hypergraph path,
-released confidence modules, released interactive-alignment fusion, classifier,
-loss, and five-fold protocol intact.
+The paper reports CO-READ C-index `0.808 ± 0.058`. The public repository does
+not release all inputs needed for an exact reproduction: its splits cover 297
+of the paper's 298 cases, RNA covers 295 split cases, and CNV/SNV are absent.
+The launcher prints this audit before training; setting
+`MREPATH_REQUIRE_PRIVATE_PAPER_DATA=1` makes these limitations fatal.

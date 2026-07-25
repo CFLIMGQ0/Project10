@@ -48,6 +48,12 @@ def _process_args():
     parser.add_argument('--opt', type=str, default="adam", help="Optimizer")
     parser.add_argument('--reg_type', type=str, default="None", help="regularization type [None, L1, L2]")
     parser.add_argument('--weighted_sample', action='store_true', default=False, help='enable weighted sampling')
+    parser.add_argument(
+        '--random_val_patches',
+        action='store_true',
+        default=False,
+        help='randomly sample validation WSI bags like the released loader',
+    )
     parser.add_argument('--batch_size', type=int, default=1, help='batch_size')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='data loader workers; use 0 for stable WSL/NTFS graph loading')
@@ -57,6 +63,13 @@ def _process_args():
     parser.add_argument('--reg', type=float, default=1e-5, help='weight decay / L2 (default: 1e-5)')
     parser.add_argument('--lr_scheduler', type=str, default='cosine')
     parser.add_argument('--warmup_epochs', type=int, default=1)
+    parser.add_argument(
+        '--checkpoint_selection',
+        type=str,
+        choices=['final', 'best'],
+        default='best',
+        help='evaluate the final epoch or reload the best validation C-index checkpoint',
+    )
 
     #---> model related
     parser.add_argument('--fusion', type=str, default=None)

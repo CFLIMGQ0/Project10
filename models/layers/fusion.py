@@ -58,56 +58,49 @@ class GraphFusion(nn.Module):
         
         return cross_token
 class AlignFusion(nn.Module):
-    """Interactive alignment fusion from the released MRePath repository."""
+    """Paper-faithful interactive alignment fusion (Eq. 10-11).
+
+    Genomics is first refined by self-attention and pathology-guided
+    co-attention.  The refined genomic tokens then guide pathology.  Returning
+    the two modalities separately prevents token-order ambiguity during global
+    pooling.
+    """
 
     def __init__(self, embedding_dim: int, num_heads: int, mlp_dim=512, num_pathways=6):
         super().__init__()
         self.num_pathways = num_pathways
+        self.genomic_self_attn = Attention(embedding_dim, num_heads)
+        self.genomic_self_norm = nn.LayerNorm(embedding_dim)
+        self.pathology_guided_genomic_attn = Attention(embedding_dim, num_heads)
+        self.genomic_cross_norm = nn.LayerNorm(embedding_dim)
+        self.genomic_guided_pathology_attn = Attention(embedding_dim, num_heads)
+        self.pathology_cross_norm = nn.LayerNorm(embedding_dim)
 
-        self.self_attn = Attention(embedding_dim, num_heads)
-        self.norm1 = nn.LayerNorm(embedding_dim)
+    def forward(self, pathology, genomics):
+        if pathology.ndim != 3 or genomics.ndim != 3:
+            raise ValueError("pathology and genomics must be [batch, tokens, dim]")
+        if genomics.shape[1] != self.num_pathways:
+            raise ValueError(
+                f"expected {self.num_pathways} genomic groups, got {genomics.shape[1]}"
+            )
 
-        self.cross_attn_pathway_to_histology = Attention(embedding_dim, num_heads)
-        self.norm2 = nn.LayerNorm(embedding_dim)
-
-        self.mlp = MLPBlock(embedding_dim, mlp_dim)
-        self.norm3 = nn.LayerNorm(embedding_dim)
-
-        self.cross_attn_histology_to_pathway = Attention(embedding_dim, num_heads)
-        self.norm4 = nn.LayerNorm(embedding_dim)
-
-        self.final_cross_attn = Attention(embedding_dim, num_heads)
-        self.final_norm = nn.LayerNorm(embedding_dim)
-
-    def forward(self, token):
-        """Fuse a token sequence containing genomics first, then pathology."""
-        keys_p = token[:, self.num_pathways:, :]
-        queries_p = token[:, :self.num_pathways, :]
-
-        queries = queries_p + self.self_attn(queries_p, queries_p, queries_p)
-        # Preserve the released forward path: norm1 is evaluated but its
-        # result is not fed to the first cross-attention operation.
-        _ = self.norm1(queries)
-
-        attn_out = self.cross_attn_pathway_to_histology(
-            q=queries, k=keys_p, v=keys_p
+        genomic_self = self.genomic_self_norm(
+            genomics
+            + self.genomic_self_attn(q=genomics, k=genomics, v=genomics)
         )
-        queries = self.norm2(queries + attn_out)
-
-        queries = self.norm3(queries + self.mlp(queries))
-
-        attn_out = self.cross_attn_histology_to_pathway(
-            q=keys_p, k=queries, v=queries
+        genomic_fused = self.genomic_cross_norm(
+            genomic_self
+            + self.pathology_guided_genomic_attn(
+                q=genomic_self, k=pathology, v=pathology
+            )
         )
-        keys = self.norm4(keys_p + attn_out)
-
-        keys = keys + keys_p
-        queries = queries + queries_p
-        queries = self.final_norm(
-            queries + self.final_cross_attn(q=queries, k=keys, v=keys)
+        pathology_fused = self.pathology_cross_norm(
+            pathology
+            + self.genomic_guided_pathology_attn(
+                q=pathology, k=genomic_fused, v=genomic_fused
+            )
         )
-
-        return torch.cat((keys, queries), dim=-2)
+        return pathology_fused, genomic_fused
 class MLPBlock(nn.Module):
     def __init__(
         self,

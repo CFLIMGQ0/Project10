@@ -4,33 +4,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON_BIN="${MREPATH_PYTHON:-/home/administrator/miniconda3/envs/mrepath-train/bin/python}"
-PREPROCESS_PYTHON="${MREPATH_PREPROCESS_PYTHON:-/home/administrator/miniconda3/envs/mrepath-preprocess/bin/python}"
-DATA_ROOT="${MREPATH_PAPER_DATA_ROOT:-${PROJECT_DIR}/data/tcga_coadread/clam_20x_resnet50_paper_k9}"
-RESULTS_ROOT="${MREPATH_PAPER_RESULTS:-${PROJECT_DIR}/results_coadread_paper_contract_v1}"
+DATA_ROOT="${MREPATH_DATA_ROOT:-${PROJECT_DIR}/data/tcga_coadread/clam_20x_resnet50}"
 
 cd "${PROJECT_DIR}"
 export PYTHONDONTWRITEBYTECODE=1
-
-# Record the known released-data limitations before every canonical run. Set
-# MREPATH_REQUIRE_PRIVATE_PAPER_DATA=1 to make those limitations fatal.
-audit_args=()
-if [[ "${MREPATH_REQUIRE_PRIVATE_PAPER_DATA:-0}" == "1" ]]; then
-  audit_args+=(--strict)
-fi
-"${PREPROCESS_PYTHON}" scripts/audit_paper_coadread.py \
-  --data-root "${DATA_ROOT}" \
-  "${audit_args[@]}"
 
 exec "${PYTHON_BIN}" main.py \
   --study tcga_coadread \
   --task survival \
   --which_splits 5folds \
   --type_of_path combine \
-  --modality hgnn \
+  --modality abmil_wsi \
   --data_root_dir "${DATA_ROOT}" \
   --label_file "${PROJECT_DIR}/datasets_csv/metadata/tcga_coadread.csv" \
   --omics_dir "${PROJECT_DIR}/datasets_csv/raw_rna_data/combine/coadread" \
-  --results_dir "${RESULTS_ROOT}" \
+  --results_dir "${PROJECT_DIR}/results_coadread_abmil_paper_strict" \
   --batch_size 1 \
   --num_workers 0 \
   --lr 0.0001 \

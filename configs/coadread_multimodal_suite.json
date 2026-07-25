@@ -1,0 +1,42 @@
+{
+  "study": "tcga_coadread",
+  "endpoint": "DSS",
+  "folds": 5,
+  "seed": 1,
+  "checkpoint_selection": "best_validation_cindex",
+  "epochs": 30,
+  "optimizer": "adam",
+  "learning_rate": 0.0001,
+  "weight_decay": 0.00001,
+  "loss": "nll_surv",
+  "alpha_surv": 0.0,
+  "pathology_encoder": "imagenet_resnet50_truncated",
+  "pathology_feature_dim": 1024,
+  "patch_size": 256,
+  "magnification": "20x",
+  "max_patches": 4096,
+  "models": [
+    "SNN+CLAM",
+    "Porpoise",
+    "MCAT",
+    "MOTCat",
+    "CMTA",
+    "SurvPath",
+    "PIBD",
+    "MRePath"
+  ],
+  "repositories": {
+    "MRePath": "e3c133b",
+    "SurvPath": "3f73ddd6705ec67d643020c5bb04fb13f9f382cc",
+    "MOTCat": "0da379f73d92c096122df139a9410d08b096e6c1",
+    "CMTA": "31340f6c74575668de35ee6c5d761467f11089e2",
+    "PORPOISE": "3390dc40e15995ba852d7a561faf0e996cf20501",
+    "PIBD": "bd5bd94e6f8d48e7679c6e68209a3a65c9e56a78"
+  },
+  "notes": {
+    "paired_cases_for_legacy_loaders": 296,
+    "snn_clam": "Late-risk fusion of the official PORPOISE SNN and its distributed gated-attention pathology head; MRePath itself cites this baseline rather than releasing a training implementation.",
+    "cmta_alpha": 1.0,
+    "porpoise_gradient_accumulation": 32
+  }
+}

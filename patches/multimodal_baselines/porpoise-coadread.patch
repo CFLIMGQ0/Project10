@@ -1,0 +1,235 @@
+diff --git a/main.py b/main.py
+index 444362c..57482fc 100644
+--- a/main.py
++++ b/main.py
+@@ -207,10 +207,11 @@ if 'survival' in args.task:
+ 	
+ 	study_dir = '%s_20x_features' % combined_study
+ 
+-	dataset = Generic_MIL_Survival_Dataset(csv_path = './%s/%s_all_clean.csv.zip' % (args.dataset_path, study),
++	feature_dir = args.data_root_dir if os.path.isdir(os.path.join(args.data_root_dir, 'pt_files')) else os.path.join(args.data_root_dir, study_dir)
++	dataset = Generic_MIL_Survival_Dataset(csv_path = './%s/%s_all_clean.csv' % (args.dataset_path, study),
+ 										   mode = args.mode,
+ 										   apply_sig = args.apply_sig,
+-										   data_dir= os.path.join(args.data_root_dir, study_dir),
++										   data_dir=feature_dir,
+ 										   shuffle = False, 
+ 										   seed = args.seed, 
+ 										   print_info = True,
+diff --git a/utils/coattn_train_utils.py b/utils/coattn_train_utils.py
+index 229efd1..827d8e4 100644
+--- a/utils/coattn_train_utils.py
++++ b/utils/coattn_train_utils.py
+@@ -119,6 +119,16 @@ def validate_survival_coattn(cur, epoch, model, loader, n_classes, early_stoppin
+         writer.add_scalar('val/loss', val_loss, epoch)
+         writer.add_scalar('val/c-index', c_index, epoch)
+ 
++    if monitor_cindex:
++        monitor_cindex(
++            c_index,
++            model,
++            ckpt_name=os.path.join(
++                results_dir, "s_{}_checkpoint.pt".format(cur)
++            ),
++            epoch=epoch,
++        )
++
+     if early_stopping:
+         assert results_dir
+         early_stopping(epoch, val_loss_surv, model, ckpt_name=os.path.join(results_dir, "s_{}_minloss_checkpoint.pt".format(cur)))
+@@ -158,9 +168,9 @@ def summary_survival_coattn(model, loader, n_classes):
+         with torch.no_grad():
+             hazards, survival, Y_hat, A  = model(x_path=data_WSI, x_omic1=data_omic1, x_omic2=data_omic2, x_omic3=data_omic3, x_omic4=data_omic4, x_omic5=data_omic5, x_omic6=data_omic6) # return hazards, S, Y_hat, A_raw, results_dict
+ 
+-        risk = np.asscalar(-torch.sum(survival, dim=1).cpu().numpy())
+-        event_time = np.asscalar(event_time)
+-        c = np.asscalar(c)
++        risk = (-torch.sum(survival, dim=1).cpu().numpy()).item()
++        event_time = event_time.item()
++        c = c.item()
+         all_risk_scores[batch_idx] = risk
+         all_censorships[batch_idx] = c
+         all_event_times[batch_idx] = event_time
+diff --git a/models/model_coattn.py b/models/model_coattn.py
+index 7dfc9c3..3e93d1c 100644
+--- a/models/model_coattn.py
++++ b/models/model_coattn.py
+@@ -471,7 +471,7 @@ def multi_head_attention_forward(query: Tensor,
+ 
+ import torch
+ from torch import Tensor
+-from torch.nn.modules.linear import _LinearWithBias
++from torch.nn import Linear as _LinearWithBias
+ from torch.nn.init import xavier_uniform_
+ from torch.nn.init import constant_
+ from torch.nn.init import xavier_normal_
+diff --git a/utils/core_utils.py b/utils/core_utils.py
+index b5feb52..133f5f4 100755
+--- a/utils/core_utils.py
++++ b/utils/core_utils.py
+@@ -1,5 +1,6 @@
+ from argparse import Namespace
+ from collections import OrderedDict
++import json
+ import os
+ import pickle 
+ 
+@@ -13,7 +14,7 @@ from datasets.dataset_generic import save_splits
+ from models.model_genomic import SNN
+ from models.model_set_mil import MIL_Sum_FC_surv, MIL_Attention_FC_surv, MIL_Cluster_FC_surv
+ from models.model_coattn import MCAT_Surv
+-from models.model_porpoise import PorpoiseMMF, PorpoiseAMIL, PorpoiseMMF_Fast
++from models.model_porpoise import PorpoiseMMF, PorpoiseAMIL
+ from utils.utils import *
+ from utils.loss_func import NLLSurvLoss
+ 
+@@ -38,7 +39,7 @@ class EarlyStopping:
+         self.counter = 0
+         self.best_score = None
+         self.early_stop = False
+-        self.val_loss_min = np.Inf
++        self.val_loss_min = np.inf
+ 
+     def __call__(self, epoch, val_loss, model, ckpt_name = 'checkpoint.pt'):
+ 
+@@ -79,16 +80,19 @@ class Monitor_CIndex:
+                             Default: False
+         """
+         self.best_score = None
++        self.best_epoch = None
+ 
+-    def __call__(self, val_cindex, model, ckpt_name:str='checkpoint.pt'):
++    def __call__(self, val_cindex, model, ckpt_name:str='checkpoint.pt', epoch=None):
+ 
+         score = val_cindex
+ 
+         if self.best_score is None:
+             self.best_score = score
++            self.best_epoch = epoch
+             self.save_checkpoint(model, ckpt_name)
+         elif score > self.best_score:
+             self.best_score = score
++            self.best_epoch = epoch
+             self.save_checkpoint(model, ckpt_name)
+         else:
+             pass
+@@ -207,8 +211,26 @@ def train(datasets: tuple, cur: int, args: Namespace):
+                 train_loop_survival(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn, reg_fn, args.lambda_reg, args.gc)
+                 stop = validate_survival(cur, epoch, model, val_loader, args.n_classes, early_stopping, monitor_cindex, writer, loss_fn, reg_fn, args.lambda_reg, args.results_dir)
+ 
+-    torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+-    model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
++    checkpoint_path = os.path.join(
++        args.results_dir, "s_{}_checkpoint.pt".format(cur)
++    )
++    if not os.path.isfile(checkpoint_path):
++        raise RuntimeError("No best-validation checkpoint was saved.")
++    model.load_state_dict(torch.load(checkpoint_path))
++    with open(
++        os.path.join(args.results_dir, "s_{}_best_epoch.json".format(cur)),
++        "w",
++        encoding="utf-8",
++    ) as handle:
++        json.dump(
++            {
++                "fold": int(cur),
++                "best_epoch": int(monitor_cindex.best_epoch),
++                "best_val_cindex": float(monitor_cindex.best_score),
++            },
++            handle,
++            indent=2,
++        )
+ 
+     if args.mode == 'coattn':
+         results_val_dict, val_cindex = summary_survival_coattn(model, val_loader, args.n_classes)
+@@ -365,6 +387,16 @@ def validate_survival(cur, epoch, model, loader, n_classes, early_stopping=None,
+         writer.add_scalar('val/loss', val_loss, epoch)
+         writer.add_scalar('val/c-index', c_index, epoch)
+ 
++    if monitor_cindex:
++        monitor_cindex(
++            c_index,
++            model,
++            ckpt_name=os.path.join(
++                results_dir, "s_{}_checkpoint.pt".format(cur)
++            ),
++            epoch=epoch,
++        )
++
+     if early_stopping:
+         assert results_dir
+         early_stopping(epoch, val_loss_surv, model, ckpt_name=os.path.join(results_dir, "s_{}_minloss_checkpoint.pt".format(cur)))
+@@ -405,8 +437,8 @@ def summary_survival(model, loader, n_classes):
+         else:
+             risk = h.detach().cpu().numpy().squeeze()
+ 
+-        event_time = np.asscalar(event_time)
+-        censor = np.asscalar(censor)
++        event_time = event_time.item()
++        censor = censor.item()
+         all_risk_scores[batch_idx] = risk
+         all_censorships[batch_idx] = censor
+         all_event_times[batch_idx] = event_time
+diff --git a/utils/utils.py b/utils/utils.py
+index ec14d24..7be98d1 100644
+--- a/utils/utils.py
++++ b/utils/utils.py
+@@ -1,4 +1,5 @@
+ import pickle
++import os
+ import torch
+ import numpy as np
+ import torch.nn as nn
+@@ -50,9 +51,9 @@ def collate_features(batch):
+ def collate_MIL_survival(batch):
+     img = torch.cat([item[0] for item in batch], dim = 0)
+     omic = torch.cat([item[1] for item in batch], dim = 0).type(torch.FloatTensor)
+-    label = torch.LongTensor([item[2] for item in batch])
+-    event_time = torch.FloatTensor([item[3] for item in batch])
+-    c = torch.FloatTensor([item[4] for item in batch])
++    label = torch.cat([torch.as_tensor(item[2]).reshape(-1) for item in batch]).long()
++    event_time = torch.cat([torch.as_tensor(item[3]).reshape(-1) for item in batch]).float()
++    c = torch.cat([torch.as_tensor(item[4]).reshape(-1) for item in batch]).float()
+     return [img, omic, label, event_time, c]
+ 
+ def collate_MIL_survival_cluster(batch):
+@@ -59,9 +60,9 @@ def collate_MIL_survival_cluster(batch):
+     img = torch.cat([item[0] for item in batch], dim = 0)
+     cluster_ids = torch.cat([item[1] for item in batch], dim = 0).type(torch.LongTensor)
+     omic = torch.cat([item[2] for item in batch], dim = 0).type(torch.FloatTensor)
+-    label = torch.LongTensor([item[3] for item in batch])
+-    event_time = np.array([item[4] for item in batch])
+-    c = torch.FloatTensor([item[5] for item in batch])
++    label = torch.cat([torch.as_tensor(item[3]).reshape(-1) for item in batch]).long()
++    event_time = torch.cat([torch.as_tensor(item[4]).reshape(-1) for item in batch]).float()
++    c = torch.cat([torch.as_tensor(item[5]).reshape(-1) for item in batch]).float()
+     return [img, cluster_ids, omic, label, event_time, c]
+ 
+ def collate_MIL_survival_sig(batch):
+@@ -73,13 +74,13 @@ def collate_MIL_survival_sig(batch):
+     omic5 = torch.cat([item[5] for item in batch], dim = 0).type(torch.FloatTensor)
+     omic6 = torch.cat([item[6] for item in batch], dim = 0).type(torch.FloatTensor)
+ 
+-    label = torch.LongTensor([item[7] for item in batch])
+-    event_time = np.array([item[8] for item in batch])
+-    c = torch.FloatTensor([item[9] for item in batch])
++    label = torch.cat([torch.as_tensor(item[7]).reshape(-1) for item in batch]).long()
++    event_time = torch.cat([torch.as_tensor(item[8]).reshape(-1) for item in batch]).float()
++    c = torch.cat([torch.as_tensor(item[9]).reshape(-1) for item in batch]).float()
+     return [img, omic1, omic2, omic3, omic4, omic5, omic6, label, event_time, c]
+ 
+ def get_simple_loader(dataset, batch_size=1):
+-    kwargs = {'num_workers': 4} if device.type == "cuda" else {}
++    kwargs = {'num_workers': int(os.environ.get("MREPATH_NUM_WORKERS", "0"))}
+     loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_MIL, **kwargs)
+     return loader 
+ 
+@@ -94,7 +95,7 @@ def get_split_loader(split_dataset, training = False, testing = False, weighted
+     else:
+         collate = collate_MIL_survival
+ 
+-    kwargs = {'num_workers': 4} if device.type == "cuda" else {}
++    kwargs = {'num_workers': int(os.environ.get("MREPATH_NUM_WORKERS", "0"))}
+     if not testing:
+         if training:
+             if weighted:

@@ -6,9 +6,10 @@ For every WSI this script performs:
   2. Non-overlapping 256 x 256 patch coordinate extraction at 20x.
   3. ImageNet-pretrained truncated ResNet50 feature extraction (1024-D).
 
-Coordinates are stored in CLAM-compatible HDF5 files.  If a slide was scanned
-at 40x, each 20x patch spans 512 x 512 level-0 pixels and is resized to
-256 x 256 before entering ResNet50.
+Coordinates are stored in CLAM-compatible HDF5 files.  The default ``true-20x``
+mode converts scanner magnification to a physical 20x field of view.  The
+``level0-256`` compatibility mode reproduces the public repository's likely
+CLAM convention by taking 256 x 256 patches directly from pyramid level 0.
 """
 
 from __future__ import annotations
@@ -47,9 +48,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--slide-id", default=None,
                         help="Only process a slide whose filename contains this value")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument("--shard-index", type=int, default=0)
+    parser.add_argument(
+        "--status-file",
+        default="preprocess_status.csv",
+        help="Status CSV basename within the output directory.",
+    )
+    parser.add_argument("--skip-inventory", action="store_true")
+    parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--patch-mode",
+        choices=("true-20x", "level0-256"),
+        default="true-20x",
+        help="Physical 20x patches or repository-compatible level-0 patches.",
+    )
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     return parser.parse_args()
@@ -96,10 +112,28 @@ def objective_power(slide: openslide.OpenSlide) -> tuple[float, str]:
     return 20.0, "fallback-20x"
 
 
-def select_patch_geometry(slide: openslide.OpenSlide) -> dict[str, Any]:
+def select_patch_geometry(
+    slide: openslide.OpenSlide, patch_mode: str = "true-20x"
+) -> dict[str, Any]:
     power, power_source = objective_power(slide)
-    target_downsample = power / 20.0
     downsamples = [float(value) for value in slide.level_downsamples]
+
+    if patch_mode == "level0-256":
+        return {
+            "patch_mode": patch_mode,
+            "objective_power": power,
+            "objective_source": power_source,
+            "target_magnification": power,
+            "target_downsample": 1.0,
+            "patch_level": 0,
+            "level_downsample": downsamples[0],
+            "read_patch_size": 256,
+            "target_patch_size": 256,
+            "effective_downsample": downsamples[0],
+            "level_downsamples": downsamples,
+        }
+
+    target_downsample = power / 20.0
 
     # Read from the highest pyramid level that is at least as detailed as 20x,
     # then resize to 256. This avoids using a 10x pyramid level on 40x scans.
@@ -112,6 +146,7 @@ def select_patch_geometry(slide: openslide.OpenSlide) -> dict[str, Any]:
     effective_downsample = level_downsample * read_patch_size / 256.0
 
     return {
+        "patch_mode": patch_mode,
         "objective_power": power,
         "objective_source": power_source,
         "target_magnification": 20.0,
@@ -132,13 +167,15 @@ def atomic_write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     os.replace(temp, path)
 
 
-def write_inventory(slides: list[Path], output: Path) -> list[dict[str, Any]]:
+def write_inventory(
+    slides: list[Path], output: Path, patch_mode: str
+) -> list[dict[str, Any]]:
     inventory_path = output / "wsi_inventory.csv"
     rows: list[dict[str, Any]] = []
     for index, path in enumerate(slides, start=1):
         try:
             with openslide.OpenSlide(str(path)) as slide:
-                geometry = select_patch_geometry(slide)
+                geometry = select_patch_geometry(slide, patch_mode)
                 rows.append({
                     "slide_id": path.stem,
                     "filename": path.name,
@@ -195,7 +232,9 @@ def validate_features(path: Path) -> tuple[int, int]:
         return 0, 0
 
 
-def segment_slide(slide_path: Path, output: Path) -> tuple[int, dict[str, Any]]:
+def segment_slide(
+    slide_path: Path, output: Path, patch_mode: str
+) -> tuple[int, dict[str, Any]]:
     from wsi_core.WholeSlideImage import WholeSlideImage
 
     patch_dir = output / "patches"
@@ -205,7 +244,7 @@ def segment_slide(slide_path: Path, output: Path) -> tuple[int, dict[str, Any]]:
 
     wsi_object = WholeSlideImage(str(slide_path))
     slide = wsi_object.getOpenSlide()
-    geometry = select_patch_geometry(slide)
+    geometry = select_patch_geometry(slide, patch_mode)
     seg_level = slide.get_best_level_for_downsample(64)
     vis_level = seg_level
     seg_width, seg_height = slide.level_dimensions[seg_level]
@@ -332,6 +371,12 @@ def extract_features(
 
 def main() -> int:
     args = parse_args()
+    if args.num_shards < 1:
+        raise ValueError("--num-shards must be positive")
+    if not 0 <= args.shard_index < args.num_shards:
+        raise ValueError("--shard-index must be in [0, num-shards)")
+    if Path(args.status_file).name != args.status_file:
+        raise ValueError("--status-file must be a basename")
     add_clam_to_path(args.clam_dir.resolve())
     stages = {value.strip() for value in args.stages.split(",") if value.strip()}
     unknown = stages - {"segment", "features"}
@@ -342,10 +387,17 @@ def main() -> int:
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     slides = discover_slides(source)
-    inventory = write_inventory(slides, output)
-    bad_inventory = [row for row in inventory if row.get("inventory_error")]
-    if bad_inventory:
-        print(f"[warning] {len(bad_inventory)} slides failed inventory inspection", flush=True)
+    if not args.skip_inventory:
+        inventory = write_inventory(slides, output, args.patch_mode)
+        bad_inventory = [row for row in inventory if row.get("inventory_error")]
+        if bad_inventory:
+            print(
+                f"[warning] {len(bad_inventory)} slides failed inventory inspection",
+                flush=True,
+            )
+    if args.inventory_only:
+        print(f"[done] inventory-only slides={len(slides)}", flush=True)
+        return 0
 
     if args.slide_id:
         slides = [slide for slide in slides if args.slide_id.lower() in slide.name.lower()]
@@ -353,14 +405,20 @@ def main() -> int:
             raise ValueError(f"No slide matched --slide-id {args.slide_id!r}")
     if args.limit is not None:
         slides = sorted(slides, key=lambda path: path.stat().st_size)[:args.limit]
+    slides = slides[args.shard_index::args.num_shards]
 
     device = torch.device(args.device if args.device != "cuda" or torch.cuda.is_available() else "cpu")
     if args.device == "cuda" and device.type != "cuda":
         raise RuntimeError("CUDA was requested but is not available")
     model = build_model(device) if "features" in stages else None
-    print(f"[setup] slides={len(slides)} stages={sorted(stages)} device={device}", flush=True)
+    print(
+        f"[setup] slides={len(slides)} stages={sorted(stages)} "
+        f"device={device} patch_mode={args.patch_mode} "
+        f"shard={args.shard_index}/{args.num_shards}",
+        flush=True,
+    )
 
-    status_path = output / "preprocess_status.csv"
+    status_path = output / args.status_file
     status_rows: list[dict[str, Any]] = []
     if status_path.is_file():
         status_rows = pd.read_csv(status_path).fillna("").to_dict("records")
@@ -376,7 +434,9 @@ def main() -> int:
             coord_path = output / "patches" / f"{slide_id}.h5"
             coord_count = validate_coords(coord_path) if not args.no_resume else 0
             if "segment" in stages and coord_count == 0:
-                coord_count, geometry = segment_slide(slide_path, output)
+                coord_count, geometry = segment_slide(
+                    slide_path, output, args.patch_mode
+                )
                 row.update(geometry)
                 row["segment_status"] = "completed"
             elif coord_count:

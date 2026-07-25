@@ -35,6 +35,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_DATA_ROOT / "graph_files")
     parser.add_argument("--metadata-csv", type=Path, default=DEFAULT_METADATA)
     parser.add_argument("--radius", type=int, default=9)
+    parser.add_argument("--feature-dim", type=int, default=1024)
+    parser.add_argument("--spatial-space", default="l2")
+    parser.add_argument("--feature-space", default="cosinesimil")
     parser.add_argument("--slide-id", default=None)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--no-resume", action="store_true")
@@ -56,11 +59,11 @@ def canonical_slide_names(metadata_csv: Path) -> dict[str, str]:
     return mapping
 
 
-def inspect_h5(path: Path) -> tuple[int, int]:
+def inspect_h5(path: Path, expected_feature_dim: int) -> tuple[int, int]:
     with h5py.File(path, "r") as handle:
         features = handle["features"]
         coords = handle["coords"]
-        if features.ndim != 2 or features.shape[1] != 1024:
+        if features.ndim != 2 or features.shape[1] != expected_feature_dim:
             raise ValueError(f"Invalid features shape: {features.shape}")
         if coords.shape != (features.shape[0], 2):
             raise ValueError(f"Invalid coords shape: {coords.shape}")
@@ -69,13 +72,20 @@ def inspect_h5(path: Path) -> tuple[int, int]:
         return int(features.shape[0]), int(features.shape[1])
 
 
-def validate_graph(path: Path, expected_nodes: int, radius: int) -> dict[str, int]:
+def validate_graph(
+    path: Path,
+    expected_nodes: int,
+    expected_feature_dim: int,
+    radius: int,
+    spatial_space: str,
+    feature_space: str,
+) -> dict[str, int]:
     # PyTorch >=2.6 defaults to weights_only=True. PyG Data objects are trusted
     # local artifacts here and therefore need an explicit full pickle load.
     graph = torch.load(path, map_location="cpu", weights_only=False)
     expected_edges = expected_nodes * (radius - 1)
     expected = {
-        "x": (expected_nodes, 1024),
+        "x": (expected_nodes, expected_feature_dim),
         "centroid": (expected_nodes, 2),
         "edge_index": (2, expected_edges),
         "edge_latent": (2, expected_edges),
@@ -91,8 +101,15 @@ def validate_graph(path: Path, expected_nodes: int, radius: int) -> dict[str, in
             raise ValueError(f"{key} contains an out-of-range node index")
     if not torch.isfinite(graph.x).all():
         raise ValueError("Graph features contain NaN or infinity")
+    if getattr(graph, "spatial_metric", None) != spatial_space:
+        raise ValueError("Graph spatial metric does not match the request")
+    if getattr(graph, "feature_metric", None) != feature_space:
+        raise ValueError("Graph feature metric does not match the request")
+    if int(getattr(graph, "hyperedge_size", -1)) != radius:
+        raise ValueError("Graph hyperedge size does not match the requested radius")
     return {"nodes": expected_nodes, "spatial_edges": expected_edges,
-            "latent_edges": expected_edges}
+            "latent_edges": expected_edges, "spatial_metric": spatial_space,
+            "feature_metric": feature_space, "hyperedge_size": radius}
 
 
 def atomic_write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
@@ -127,7 +144,12 @@ def main() -> int:
     by_source = {str(row["source_h5"]): row for row in rows if row.get("source_h5")}
 
     failures = 0
-    print(f"[setup] selected={len(h5_files)} radius={args.radius} output={output_dir}", flush=True)
+    print(
+        f"[setup] selected={len(h5_files)} radius={args.radius} "
+        f"spatial={args.spatial_space} feature={args.feature_space} "
+        f"output={output_dir}",
+        flush=True,
+    )
     for index, (h5_path, graph_stem) in enumerate(zip(h5_files, destinations), start=1):
         graph_path = output_dir / f"{graph_stem}.pt"
         temp_path = output_dir / f"{graph_stem}.pt.partial"
@@ -136,7 +158,7 @@ def main() -> int:
         started = time.time()
         print(f"[graph] {index}/{len(h5_files)} {h5_path.stem}", flush=True)
         try:
-            nodes, feature_dim = inspect_h5(h5_path)
+            nodes, feature_dim = inspect_h5(h5_path, args.feature_dim)
             existing_complete = (
                 not args.no_resume
                 and graph_path.is_file()
@@ -149,13 +171,32 @@ def main() -> int:
                 row["feature_dim"] = feature_dim
             else:
                 if existing_complete:
-                    stats = validate_graph(graph_path, nodes, args.radius)
+                    stats = validate_graph(
+                        graph_path,
+                        nodes,
+                        feature_dim,
+                        args.radius,
+                        args.spatial_space,
+                        args.feature_space,
+                    )
                 else:
                     temp_path.unlink(missing_ok=True)
                     with h5py.File(h5_path, "r") as handle:
-                        graph = pt2graph(handle, radius=args.radius)
+                        graph = pt2graph(
+                            handle,
+                            radius=args.radius,
+                            spatial_space=args.spatial_space,
+                            feature_space=args.feature_space,
+                        )
                     torch.save(graph, temp_path)
-                    stats = validate_graph(temp_path, nodes, args.radius)
+                    stats = validate_graph(
+                        temp_path,
+                        nodes,
+                        feature_dim,
+                        args.radius,
+                        args.spatial_space,
+                        args.feature_space,
+                    )
                     os.replace(temp_path, graph_path)
                     del graph
                 row.update(stats)

@@ -1,0 +1,181 @@
+diff --git a/datasets/dataset_survival.py b/datasets/dataset_survival.py
+index b0e93d1..d33cc7d 100644
+--- a/datasets/dataset_survival.py
++++ b/datasets/dataset_survival.py
+@@ -4,7 +4,12 @@ import os
+ import pdb
+ from unittest import case
+ import pandas as pd
+-import dgl 
++# DGL is not used by this dataset implementation.  Keeping the import optional
++# lets the released MCAT/SurvPath baselines run in environments without DGL.
++try:
++    import dgl
++except ModuleNotFoundError:
++    dgl = None
+ import pickle
+ import networkx as nx
+ import numpy as np
+diff --git a/main.py b/main.py
+index a30edc3..f9c82c5 100644
+--- a/main.py
++++ b/main.py
+@@ -62,7 +62,9 @@ def main(args):
+     })
+ 
+     if len(folds) != args.k:
+-        save_name = 'summary_partial_{}_{}.csv'.format(start, end)
++        save_name = 'summary_partial_{}_{}.csv'.format(
++            folds[0], folds[-1] + 1
++        )
+     else:
+         save_name = 'summary.csv'
+         
+diff --git a/utils/general_utils.py b/utils/general_utils.py
+index cd9a0ad..05f38b2 100644
+--- a/utils/general_utils.py
++++ b/utils/general_utils.py
+@@ -484,7 +484,12 @@ def get_split_loader(args, split_dataset, training=False, testing=False, weighte
+     
+     """
+ 
+-    kwargs = {'num_workers': 8} if device.type == "cuda" else {}
++    # The released value (8) leaks shared-memory file descriptors across
++    # repeated folds in this environment. Single-process loading is stable and
++    # does not change samples, model computation, or the random seed.
++    kwargs = {
++        'num_workers': int(os.environ.get("MREPATH_NUM_WORKERS", "0"))
++    }
+     
+     if args.modality in ["omics", "snn", "mlp_per_path"]:
+         collate_fn = _collate_omics
+diff --git a/utils/core_utils.py b/utils/core_utils.py
+index e148da4..3c2257a 100644
+--- a/utils/core_utils.py
++++ b/utils/core_utils.py
+@@ -1,4 +1,6 @@
+ from ast import Lambda
++import copy
++import json
+ import numpy as np
+ import pdb
+ import os
+@@ -13,7 +15,12 @@ from models.model_MCATPathways import MCATPathways
+ from models.model_SurvPath import SurvPath
+ from models.model_SurvPath_with_nystrom import SurvPath_with_nystrom
+ from models.model_TMIL import TMIL
+-from models.model_motcat import MCATPathwaysMotCat
++try:
++    from models.model_motcat import MCATPathwaysMotCat
++except ModuleNotFoundError:
++    # The public SurvPath commit references this file but does not ship it.
++    # MCAT and SurvPath do not need MOTCat, so keep those official paths usable.
++    MCATPathwaysMotCat = None
+ from sksurv.metrics import concordance_index_censored, concordance_index_ipcw, brier_score, integrated_brier_score, cumulative_dynamic_auc
+ from sksurv.util import Surv
+ 
+@@ -195,6 +202,11 @@ def _init_model(args):
+         model = MCATPathways(**model_dict)
+ 
+     elif args.modality == "coattn_motcat":
++        if MCATPathwaysMotCat is None:
++            raise RuntimeError(
++                "The public SurvPath repository does not include "
++                "models/model_motcat.py; install the compatibility wrapper."
++            )
+ 
+         model_dict = {
+             'fusion': args.fusion, 'omic_sizes': args.omic_sizes, 'n_classes': args.n_classes,
+@@ -743,16 +755,56 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
+ 
+     all_survival = _extract_survival_metadata(train_loader, val_loader)
+     
++    best_epoch = -1
++    best_cindex = float("-inf")
++    best_state_dict = None
++
+     for epoch in range(args.max_epochs):
+         _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
+-        # _, val_cindex, _, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
+-        # print('Val loss:', total_loss, ', val_c_index:', val_cindex)
+-    # save the trained model
+-    torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
++        _, val_cindex, _, _, _, _, total_loss = _summary(
++            args.dataset_factory, model, args.modality, val_loader, loss_fn,
++            all_survival
++        )
++        print(
++            "Epoch: {}, val_loss: {:.4f}, val_c_index: {:.4f}".format(
++                epoch, total_loss, val_cindex
++            )
++        )
++        if np.isfinite(val_cindex) and val_cindex > best_cindex:
++            best_epoch = epoch
++            best_cindex = float(val_cindex)
++            best_state_dict = copy.deepcopy(model.state_dict())
++
++    if best_state_dict is None:
++        raise RuntimeError("No finite validation C-index was produced.")
++
++    model.load_state_dict(best_state_dict)
++    torch.save(
++        best_state_dict,
++        os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))
++    )
++    with open(
++        os.path.join(args.results_dir, "s_{}_best_epoch.json".format(cur)),
++        "w",
++        encoding="utf-8",
++    ) as handle:
++        json.dump(
++            {
++                "fold": int(cur),
++                "best_epoch": int(best_epoch),
++                "best_val_cindex": best_cindex,
++            },
++            handle,
++            indent=2,
++        )
+     
+     results_dict, val_cindex, val_cindex_ipcw, val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
+     
+-    print('Final Val c-index: {:.4f}'.format(val_cindex))
++    print(
++        'Best Val c-index: {:.4f} at epoch {}'.format(
++            val_cindex, best_epoch
++        )
++    )
+     # print('Final Val c-index: {:.4f} | Final Val c-index2: {:.4f} | Final Val IBS: {:.4f} | Final Val iauc: {:.4f}'.format(
+     #     val_cindex, 
+     #     val_cindex_ipcw,
+diff --git a/models/model_motcat.py b/models/model_motcat.py
+new file mode 100644
+index 0000000..0905aef
+--- /dev/null
++++ b/models/model_motcat.py
+@@ -0,0 +1,25 @@
++"""Compatibility wrapper around the official MOTCat model."""
++
++from importlib.util import module_from_spec, spec_from_file_location
++from pathlib import Path
++
++import torch
++
++
++_source = (
++    Path(__file__).resolve().parents[2]
++    / "MOTCat"
++    / "models"
++    / "model_motcat.py"
++)
++_spec = spec_from_file_location("_official_motcat_model", _source)
++_module = module_from_spec(_spec)
++_spec.loader.exec_module(_module)
++
++
++class MCATPathwaysMotCat(_module.MOTCAT_Surv):
++    def forward(self, **kwargs):
++        hazards, _, _, _ = super().forward(**kwargs)
++        return torch.logit(
++            hazards.clamp(min=1e-7, max=1 - 1e-7)
++        )

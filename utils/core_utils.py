@@ -150,14 +150,10 @@ def _init_model(args):
         model = SNNOmics(**model_dict)
 
     elif args.modality in ["abmil_wsi", "abmil_wsi_pathways"]:
-
-        model_dict = {
-            "device" : args.device, "df_comp" : args.composition_df, "omic_input_dim" : omics_input_dim,
-            "dim_per_path_1" : args.encoding_layer_1_dim, "dim_per_path_2" : args.encoding_layer_2_dim,
-            "fusion":args.fusion
-        }
-
-        model = ABMIL(**model_dict)
+        raise NotImplementedError(
+            "ABMIL is archived under archive/experimental_models and is not "
+            "part of the canonical MRePath reproduction."
+        )
 
     # unimodal and multimodal baselines
     elif args.modality in ["deepmisl_wsi", "deepmisl_wsi_pathways"]:
@@ -311,6 +307,9 @@ def _unpack_data(modality, device, data):
     
     """
     
+    graph = None
+    mask = None
+
     if modality in ["mlp_per_path", "omics", "snn"]:
         data_WSI = data[0]
         mask = None
@@ -364,7 +363,7 @@ def _unpack_data(modality, device, data):
     
     y_disc, event_time, censor = y_disc.to(device), event_time.to(device), censor.to(device)
 
-    return data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list
+    return data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list, mask
 
 def _process_data_and_forward(model, modality, device, data):
     r"""
@@ -384,7 +383,7 @@ def _process_data_and_forward(model, modality, device, data):
         - clinical_data_list : List
     
     """
-    data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list = _unpack_data(modality, device, data)
+    data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list, mask = _unpack_data(modality, device, data)
     
     if modality in ["coattn", "coattn_motcat"]:  
         
@@ -650,7 +649,7 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
     with torch.no_grad():
         for data in loader:
 
-            data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list = _unpack_data(modality, device, data)
+            data_WSI, graph, y_disc, event_time, censor, data_omics, clinical_data_list, mask = _unpack_data(modality, device, data)
 
             if modality in ["coattn", "coattn_motcat"]:  
                 h = model(
@@ -851,10 +850,20 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
     
 
    
-    model.load_state_dict(torch.load(best_checkpoint_path, weights_only=True))
+    final_checkpoint_path = os.path.join(
+        args.results_dir, "s_{}_checkpoint.pt".format(cur)
+    )
+    torch.save(model.state_dict(), final_checkpoint_path)
+    checkpoint_selection = getattr(args, "checkpoint_selection", "best")
+    if checkpoint_selection == "best":
+        model.load_state_dict(torch.load(best_checkpoint_path, weights_only=True))
     results_dict, val_cindex, val_cindex_ipcw, _, _, _,val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
     
-    print('Final Val c-index: {:.4f}'.format(best_val_index))
+    print(
+        'Selected ({}) Val c-index: {:.4f}; best observed during training: {:.4f}'.format(
+            checkpoint_selection, val_cindex, best_val_index
+        )
+    )
     # print('Final Val c-index: {:.4f} | Final Val c-index2: {:.4f} | Final Val IBS: {:.4f} | Final Val iauc: {:.4f}'.format(
     #     val_cindex, 
     #     val_cindex_ipcw,

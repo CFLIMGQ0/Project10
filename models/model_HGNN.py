@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from models.layers.cross_attention import FeedForward
 from models.layers.fusion import AlignFusion
 from models.layers.layers import *
 from models.layers.sheaf_builder import *
@@ -10,6 +9,53 @@ from .util import initialize_weights
 from .util import SNN_Block
 import dhg
 from collections import defaultdict
+
+
+class DynamicWeighting(nn.Module):
+    """Dynamic modality weighting described by MRePath Eq. (7)-(9)."""
+
+    def __init__(self, embedding_dim=256, num_pathways=6, num_patches=4096):
+        super().__init__()
+        self.num_patches = num_patches
+        self.path_token_projection = nn.Linear(embedding_dim, 1)
+        self.path_confidence = nn.Sequential(
+            nn.Linear(num_patches, num_patches * 2),
+            nn.Linear(num_patches * 2, num_patches),
+            nn.Linear(num_patches, 1),
+            nn.Sigmoid(),
+        )
+        genomic_dim = num_pathways * embedding_dim
+        self.genomic_confidence = nn.Sequential(
+            nn.Linear(genomic_dim, genomic_dim * 2),
+            nn.Linear(genomic_dim * 2, genomic_dim),
+            nn.Linear(genomic_dim, 1),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, pathology, genomics):
+        if pathology.ndim != 3 or genomics.ndim != 3:
+            raise ValueError("pathology and genomics must be [batch, tokens, dim]")
+
+        path_scores = self.path_token_projection(pathology).squeeze(-1)
+        if path_scores.shape[1] == self.num_patches:
+            path_mono = self.path_confidence(path_scores)
+        else:
+            path_mono = torch.sigmoid(path_scores.mean(dim=1, keepdim=True))
+        gene_mono = self.genomic_confidence(genomics.flatten(start_dim=1))
+
+        eps = 1e-4
+        path_mono = path_mono.clamp(eps, 1.0 - eps)
+        gene_mono = gene_mono.clamp(eps, 1.0 - eps)
+        log_path = torch.log(path_mono)
+        log_gene = torch.log(gene_mono)
+        log_joint = log_path + log_gene
+        path_holo = log_path / log_joint
+        gene_holo = log_gene / log_joint
+        confidence = torch.cat(
+            (path_mono + path_holo, gene_mono + gene_holo), dim=1
+        )
+        weights = torch.softmax(confidence, dim=1)
+        return weights, (path_mono, gene_mono, path_holo, gene_holo)
     
 class MRePath(nn.Module):
     def __init__(self, omic_sizes=[100, 200, 300, 400, 500, 600], n_classes=4,
@@ -60,24 +106,13 @@ class MRePath(nn.Module):
         self.genomics_fc = nn.ModuleList(sig_networks)
        
         
-        # Modality rebalance. The module layout and naming intentionally match
-        # the official MRePath release so released checkpoints remain legible.
+        # Modality rebalance from Eq. (7)-(9).
         g_dim = self.size_dict["genomics"][model_size][-1]
-        p_dim = self.size_dict["pathomics"][model_size][-1]
         g_num = 6
-        p_num = num_patches
-        self.ConfidNet_g = nn.Sequential(
-            nn.Linear(g_num * g_dim, g_num * g_dim * 2),
-            nn.Linear(g_num * g_dim * 2, g_num * g_dim),
-            nn.Linear(g_num * g_dim, 1),
-            nn.Sigmoid(),
-        )
-        self.ConfiNet_p_pre = nn.Linear(p_dim, 1)
-        self.ConfidNet_p = nn.Sequential(
-            nn.Linear(p_num, p_num * 2),
-            nn.Linear(p_num * 2, p_num),
-            nn.Linear(p_num, 1),
-            nn.Sigmoid(),
+        self.dynamic_weighting = DynamicWeighting(
+            embedding_dim=g_dim,
+            num_pathways=g_num,
+            num_patches=num_patches,
         )
         
         self.attention_fusion = AlignFusion(
@@ -90,8 +125,6 @@ class MRePath(nn.Module):
         self.mm = nn.Sequential(
                 *[nn.Linear(hidden[-1]*2, hidden[-1]//2), nn.ReLU()]
             )
-        self.feed_forward = FeedForward(g_dim, dropout=0.25)
-        self.layer_norm = nn.LayerNorm(g_dim)
         self.classifier = nn.Linear(hidden[-1]//2, self.n_classes)
 
         self.apply(initialize_weights)
@@ -140,34 +173,13 @@ class MRePath(nn.Module):
                 pathomics_features.device
             )
 
-        # Released modality-confidence path. These values are retained for
-        # checkpoint compatibility and diagnostics, matching the official
-        # implementation's forward computation.
-        wsi_f = pathomics_features.unsqueeze(0)
-        gene_f = genomics_features.clone()
-
-        if wsi_f.shape[1] == self.ConfidNet_p[0].in_features:
-            path_tcp = self.ConfidNet_p(self.ConfiNet_p_pre(wsi_f).view(1, -1))
-        else:
-            path_tcp = torch.sigmoid(
-                self.ConfiNet_p_pre(wsi_f).view(1, -1).mean(dim=1, keepdim=True)
-            )
-        gene_tcp = self.ConfidNet_g(gene_f.view(1, -1))
-
-        path_holo = torch.log(gene_tcp) / (
-            torch.log(path_tcp * gene_tcp) + 1e-8
+        # Algorithm 1 computes weights from encoded raw pathology P and
+        # genomics G, then applies them to high-order pathology Ph and G.
+        weights, confidence = self.dynamic_weighting(
+            pathomics_features.unsqueeze(0), genomics_features
         )
-        gene_holo = torch.log(path_tcp) / (
-            torch.log(path_tcp * gene_tcp) + 1e-8
-        )
-        confidence = torch.stack(
-            (
-                path_tcp.detach() + path_holo.detach(),
-                gene_tcp.detach() + gene_holo.detach(),
-            ),
-            dim=1,
-        )
-        self.last_modality_weights = torch.softmax(confidence, dim=1).detach()
+        self.last_modality_weights = weights.detach()
+        self.last_confidence = tuple(value.detach() for value in confidence)
                 
         # three layers hypergraph convolution
         if self.graph_type=="HGNN":
@@ -185,7 +197,7 @@ class MRePath(nn.Module):
                         num_edges=num_edges,
                     )
                     pathomics_features = F.dropout(
-                        pathomics_features, p=0.25, training=True
+                        pathomics_features, p=0.25, training=self.training
                     )
 
                 pathomics_features = self.convs[-1](
@@ -199,12 +211,15 @@ class MRePath(nn.Module):
         else:
             pathomics_features = self.graph(pathomics_features, edge_total).unsqueeze(0)
 
-        token = torch.cat((genomics_features, pathomics_features), dim=1)
-        token_cross = self.attention_fusion(token=token)
-        token_cross = self.layer_norm(self.feed_forward(token_cross))
+        pathomics_features = pathomics_features * weights[:, 0].view(-1, 1, 1)
+        genomics_features = genomics_features * weights[:, 1].view(-1, 1, 1)
+        pathology_fused, genomics_fused = self.attention_fusion(
+            pathology=pathomics_features,
+            genomics=genomics_features,
+        )
 
-        paths_postSA_embed = torch.mean(token_cross[:, :6, :], dim=1)
-        wsi_postSA_embed = torch.mean(token_cross[:, 6:, :], dim=1)
+        paths_postSA_embed = torch.mean(genomics_fused, dim=1)
+        wsi_postSA_embed = torch.mean(pathology_fused, dim=1)
 
         fusion = self.mm(
             torch.cat([paths_postSA_embed, wsi_postSA_embed], dim=1)

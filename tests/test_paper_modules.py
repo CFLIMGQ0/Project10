@@ -1,30 +1,36 @@
 import unittest
+import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import torch
 
 from models.layers.fusion import AlignFusion
-from models.model_HGNN import MRePath
+from models.model_HGNN import DynamicWeighting, MRePath
 from utils.core_utils import _init_optim
 
 
-class ReleasedInteractiveAlignmentFusionTests(unittest.TestCase):
+class PaperInteractiveAlignmentFusionTests(unittest.TestCase):
     def test_token_shapes_and_gradients(self):
         torch.manual_seed(11)
         module = AlignFusion(embedding_dim=32, num_heads=4, num_pathways=6)
-        token = torch.randn(2, 19, 32, requires_grad=True)
+        pathology = torch.randn(2, 13, 32, requires_grad=True)
+        genomics = torch.randn(2, 6, 32, requires_grad=True)
 
-        fused = module(token)
+        pathology_fused, genomics_fused = module(pathology, genomics)
 
-        self.assertEqual(fused.shape, token.shape)
-        self.assertTrue(torch.all(torch.isfinite(fused)))
-        fused.mean().backward()
-        self.assertIsNotNone(token.grad)
-        self.assertIn("final_cross_attn", dict(module.named_modules()))
+        self.assertEqual(pathology_fused.shape, pathology.shape)
+        self.assertEqual(genomics_fused.shape, genomics.shape)
+        self.assertTrue(torch.all(torch.isfinite(pathology_fused)))
+        self.assertTrue(torch.all(torch.isfinite(genomics_fused)))
+        (pathology_fused.mean() + genomics_fused.mean()).backward()
+        self.assertIsNotNone(pathology.grad)
+        self.assertIsNotNone(genomics.grad)
 
 
-class ReleasedMRePathStructureTests(unittest.TestCase):
-    def test_resnet50_input_and_released_modules(self):
+class PaperMRePathStructureTests(unittest.TestCase):
+    def test_resnet50_input_and_paper_modules(self):
         model = MRePath(
             omic_sizes=[4, 5, 6, 7, 8, 9],
             path_input_dim=1024,
@@ -32,11 +38,40 @@ class ReleasedMRePathStructureTests(unittest.TestCase):
         )
 
         self.assertEqual(model.pathomics_fc[0].in_features, 1024)
-        self.assertEqual(model.ConfidNet_p[0].in_features, 8)
-        self.assertEqual(model.ConfidNet_g[0].in_features, 6 * 256)
-        self.assertTrue(hasattr(model, "feed_forward"))
-        self.assertTrue(hasattr(model, "layer_norm"))
-        self.assertFalse(hasattr(model, "dynamic_weighting"))
+        self.assertEqual(model.dynamic_weighting.path_confidence[0].in_features, 8)
+        self.assertEqual(
+            model.dynamic_weighting.genomic_confidence[0].in_features, 6 * 256
+        )
+        self.assertTrue(hasattr(model, "dynamic_weighting"))
+
+    def test_dynamic_weights_follow_equations_and_receive_gradients(self):
+        torch.manual_seed(7)
+        module = DynamicWeighting(
+            embedding_dim=8, num_pathways=2, num_patches=5
+        )
+        pathology = torch.randn(2, 5, 8, requires_grad=True)
+        genomics = torch.randn(2, 2, 8, requires_grad=True)
+
+        weights, (path_mono, gene_mono, path_holo, gene_holo) = module(
+            pathology, genomics
+        )
+
+        log_joint = torch.log(path_mono) + torch.log(gene_mono)
+        self.assertTrue(
+            torch.allclose(path_holo, torch.log(path_mono) / log_joint)
+        )
+        self.assertTrue(
+            torch.allclose(gene_holo, torch.log(gene_mono) / log_joint)
+        )
+        self.assertTrue(torch.allclose(weights.sum(dim=1), torch.ones(2)))
+
+        weighted_signal = (
+            weights[:, 0] * pathology.mean(dim=(1, 2))
+            + weights[:, 1] * genomics.mean(dim=(1, 2))
+        ).sum()
+        weighted_signal.backward()
+        self.assertIsNotNone(module.path_confidence[0].weight.grad)
+        self.assertIsNotNone(module.genomic_confidence[0].weight.grad)
 
 
 class PaperTrainingProfileTests(unittest.TestCase):
@@ -48,6 +83,46 @@ class PaperTrainingProfileTests(unittest.TestCase):
 
         self.assertEqual(optimizer.param_groups[0]["lr"], 1e-4)
         self.assertEqual(optimizer.param_groups[0]["weight_decay"], 1e-5)
+
+    def test_launcher_matches_machine_readable_contract(self):
+        root = Path(__file__).resolve().parents[1]
+        contract = json.loads(
+            (root / "configs/paper_coadread.json").read_text()
+        )
+        launcher = (root / "scripts/run_coadread.sh").read_text()
+
+        expected_flags = {
+            "--encoding_dim": contract["pathology"]["feature_dimension"],
+            "--num_patches": contract["pathology"]["patches_per_case"],
+            "--n_classes": contract["cohort"]["survival_bins"],
+            "--k": contract["cohort"]["folds"],
+            "--lr": contract["training"]["learning_rate"],
+            "--reg": contract["training"]["weight_decay"],
+            "--max_epochs": contract["training"]["epochs"],
+            "--seed": contract["training"]["seed"],
+            "--warmup_epochs": contract["training"]["warmup_epochs"],
+        }
+        for flag, value in expected_flags.items():
+            match = re.search(
+                rf"{re.escape(flag)}\s+([^\s\\]+)", launcher
+            )
+            self.assertIsNotNone(match, flag)
+            if isinstance(value, float):
+                self.assertEqual(float(match.group(1)), value)
+            else:
+                self.assertEqual(int(match.group(1)), value)
+        self.assertIn(
+            f'--opt {contract["training"]["optimizer"]}', launcher
+        )
+        self.assertIn(
+            f'--bag_loss {contract["training"]["loss"]}', launcher
+        )
+        self.assertIn(
+            f'--checkpoint_selection '
+            f'{contract["training"]["checkpoint_selection"]}',
+            launcher,
+        )
+        self.assertNotIn("--weighted_sample", launcher)
 
 
 if __name__ == "__main__":

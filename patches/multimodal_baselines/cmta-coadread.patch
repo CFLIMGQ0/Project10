@@ -1,0 +1,58 @@
+diff --git a/datasets/dataset_survival.py b/datasets/dataset_survival.py
+index f75abbb..dde290b 100644
+--- a/datasets/dataset_survival.py
++++ b/datasets/dataset_survival.py
+@@ -157,7 +157,8 @@ class Generic_WSI_Survival_Dataset(Dataset):
+             mask = self.slide_data['slide_id'].isin(split.tolist())
+             df_slice = self.slide_data[mask].reset_index(drop=True)
+             split = Generic_Split(df_slice, metadata=self.metadata, modal=self.modal, signatures=self.signatures,
+-                                  data_dir=self.data_dir, label_col=self.label_col, patient_dict=self.patient_dict, num_classes=self.num_classes)
++                                  data_dir=self.data_dir, label_col=self.label_col, patient_dict=self.patient_dict,
++                                  num_classes=self.num_classes, OOM=self.OOM)
+         else:
+             split = None
+ 
+@@ -299,7 +300,8 @@ class Generic_MIL_Survival_Dataset(Generic_WSI_Survival_Dataset):
+ 
+ 
+ class Generic_Split(Generic_MIL_Survival_Dataset):
+-    def __init__(self, slide_data, metadata, modal, signatures=None, data_dir=None, label_col=None, patient_dict=None, num_classes=2):
++    def __init__(self, slide_data, metadata, modal, signatures=None, data_dir=None, label_col=None,
++                 patient_dict=None, num_classes=2, OOM=0):
+         self.use_h5 = False
+         self.slide_data = slide_data
+         self.metadata = metadata
+@@ -308,6 +310,7 @@ class Generic_Split(Generic_MIL_Survival_Dataset):
+         self.num_classes = num_classes
+         self.label_col = label_col
+         self.patient_dict = patient_dict
++        self.OOM = OOM
+         self.slide_cls_ids = [[] for i in range(self.num_classes)]
+ 
+         for i in range(self.num_classes):
+diff --git a/main.py b/main.py
+index 6f24104..724ff79 100644
+--- a/main.py
++++ b/main.py
+@@ -18,7 +18,8 @@ def main(args):
+     set_seed(args.seed)
+ 
+     # create results directory
+-    results_dir = "./results/{dataset}/[{model}]-[{fusion}]-[{alpha}]-[{time}]".format(
++    results_dir = "{root}/{dataset}/[{model}]-[{fusion}]-[{alpha}]-[{time}]".format(
++        root=args.results_dir,
+         dataset=args.dataset,
+         model=args.model,
+         fusion=args.fusion,
+diff --git a/utils/options.py b/utils/options.py
+index a4efbb5..502a6e6 100644
+--- a/utils/options.py
++++ b/utils/options.py
+@@ -8,6 +8,7 @@ def parse_args():
+     parser.add_argument(
+         "--data_root_dir", type=str, default="path/to/data_root_dir", help="Data directory to WSI features (extracted via CLAM"
+     )
++    parser.add_argument("--results_dir", type=str, default="./results")
+     parser.add_argument("--seed", type=int, default=1, help="Random seed for reproducible experiment (default: 1)")
+     parser.add_argument(
+         "--which_splits", type=str, default="5foldcv", help="Which splits folder to use in ./splits/ (Default: ./splits/5foldcv"

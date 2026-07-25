@@ -4,22 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PYTHON_BIN="${MREPATH_PYTHON:-/home/administrator/miniconda3/envs/mrepath-train/bin/python}"
-PREPROCESS_PYTHON="${MREPATH_PREPROCESS_PYTHON:-/home/administrator/miniconda3/envs/mrepath-preprocess/bin/python}"
-DATA_ROOT="${MREPATH_PAPER_DATA_ROOT:-${PROJECT_DIR}/data/tcga_coadread/clam_20x_resnet50_paper_k9}"
-RESULTS_ROOT="${MREPATH_PAPER_RESULTS:-${PROJECT_DIR}/results_coadread_paper_contract_v1}"
+DATA_ROOT="${MREPATH_LEVEL0_DATA_ROOT:-${PROJECT_DIR}/data/tcga_coadread/clam_level0_256_resnet50_repo_k9}"
+RESULTS_ROOT="${MREPATH_LEVEL0_RESULTS:-${PROJECT_DIR}/results_coadread_level0_256_repo_train}"
 
 cd "${PROJECT_DIR}"
 export PYTHONDONTWRITEBYTECODE=1
-
-# Record the known released-data limitations before every canonical run. Set
-# MREPATH_REQUIRE_PRIVATE_PAPER_DATA=1 to make those limitations fatal.
-audit_args=()
-if [[ "${MREPATH_REQUIRE_PRIVATE_PAPER_DATA:-0}" == "1" ]]; then
-  audit_args+=(--strict)
-fi
-"${PREPROCESS_PYTHON}" scripts/audit_paper_coadread.py \
-  --data-root "${DATA_ROOT}" \
-  "${audit_args[@]}"
 
 exec "${PYTHON_BIN}" main.py \
   --study tcga_coadread \
@@ -34,10 +23,12 @@ exec "${PYTHON_BIN}" main.py \
   --batch_size 1 \
   --num_workers 0 \
   --lr 0.0001 \
-  --opt adam \
-  --reg 0.00001 \
+  --opt radam \
+  --reg 0.0001 \
   --seed 1 \
-  --alpha_surv 0.0 \
+  --alpha_surv 0.5 \
+  --weighted_sample \
+  --random_val_patches \
   --max_epochs 30 \
   --encoding_dim 1024 \
   --label_col survival_months_dss \
@@ -47,7 +38,7 @@ exec "${PYTHON_BIN}" main.py \
   --num_patches 4096 \
   --wsi_projection_dim 256 \
   --fusion concat \
-  --lr_scheduler constant \
-  --warmup_epochs 0 \
-  --checkpoint_selection best \
+  --lr_scheduler cosine \
+  --warmup_epochs 1 \
+  --checkpoint_selection final \
   "$@"
