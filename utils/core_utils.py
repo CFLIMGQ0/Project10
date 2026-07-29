@@ -205,6 +205,13 @@ def _init_model(args):
             'n_classes': args.n_classes, "model_size": "small",
             'path_input_dim': args.encoding_dim,
             'num_patches': args.num_patches,
+            'graph_type': args.mrepath_graph_type,
+            'hyperedge_mode': args.mrepath_hyperedges,
+            'weighting_mode': args.mrepath_weighting,
+            'fixed_pathology_weight': args.mrepath_path_weight,
+            'fixed_genomic_weight': args.mrepath_gene_weight,
+            'fusion_variant': args.mrepath_fusion,
+            'gene_aggregation': args.mrepath_gene_aggregation,
         }
         model = MRePath(**model_dict)
 

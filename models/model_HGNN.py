@@ -8,6 +8,7 @@ from torch_scatter import scatter_mean
 from .util import initialize_weights
 from .util import SNN_Block
 import dhg
+from dhg.nn import HGNNPConv
 from collections import defaultdict
 
 
@@ -56,16 +57,93 @@ class DynamicWeighting(nn.Module):
         )
         weights = torch.softmax(confidence, dim=1)
         return weights, (path_mono, gene_mono, path_holo, gene_holo)
-    
+
+
+class GeneGraphAggregator(nn.Module):
+    """Aggregate the six genomic signatures on a fully connected graph."""
+
+    def __init__(self, embedding_dim=256, method="default"):
+        super().__init__()
+        if method not in {"default", "gcn", "gat"}:
+            raise ValueError(f"Unknown genomic aggregation method: {method}")
+        self.method = method
+        if method == "default":
+            self.graph = None
+        elif method == "gcn":
+            from torch_geometric.nn.models import GCN
+
+            self.graph = GCN(
+                in_channels=embedding_dim,
+                hidden_channels=embedding_dim,
+                out_channels=embedding_dim,
+                num_layers=3,
+                dropout=0.25,
+            )
+        else:
+            from torch_geometric.nn.models import GAT
+
+            self.graph = GAT(
+                in_channels=embedding_dim,
+                hidden_channels=embedding_dim,
+                out_channels=embedding_dim,
+                num_layers=3,
+                dropout=0.25,
+            )
+
+        fully_connected = [
+            (source, target)
+            for source in range(6)
+            for target in range(6)
+            if source != target
+        ]
+        self.register_buffer(
+            "edge_index",
+            torch.tensor(fully_connected, dtype=torch.long).t().contiguous(),
+            persistent=False,
+        )
+
+    def forward(self, genomics):
+        if self.graph is None:
+            return genomics
+        if genomics.ndim != 3 or genomics.shape[1] != 6:
+            raise ValueError("genomics must be [batch, 6, embedding_dim]")
+        return torch.stack(
+            [self.graph(sample, self.edge_index) for sample in genomics], dim=0
+        )
+
 class MRePath(nn.Module):
     def __init__(self, omic_sizes=[100, 200, 300, 400, 500, 600], n_classes=4,
-                 fusion="concat", model_size="small", graph_type="HGNN",
-                 path_input_dim=1024, num_patches=4096):
+                 fusion="concat", model_size="small", graph_type="shgnn",
+                 path_input_dim=1024, num_patches=4096,
+                 hyperedge_mode="both", weighting_mode="dynamic",
+                 fixed_pathology_weight=0.5, fixed_genomic_weight=0.5,
+                 fusion_variant="ifa", gene_aggregation="default"):
         super(MRePath, self).__init__()
 
         self.omic_sizes = omic_sizes
         self.n_classes = n_classes
         self.fusion = fusion
+        graph_aliases = {
+            "HGNN": "shgnn",
+            "SHGNN": "shgnn",
+            "GCN": "gcn",
+            "GAT": "gat",
+            "MLP": "mlp",
+        }
+        graph_type = graph_aliases.get(graph_type, graph_type.lower())
+        if graph_type not in {"mlp", "gat", "gcn", "hgnn", "shgnn"}:
+            raise ValueError(f"Unknown pathology graph type: {graph_type}")
+        if hyperedge_mode not in {"none", "topology", "feature", "both"}:
+            raise ValueError(f"Unknown hyperedge mode: {hyperedge_mode}")
+        if weighting_mode not in {"dynamic", "fixed"}:
+            raise ValueError(f"Unknown modality weighting mode: {weighting_mode}")
+        if fixed_pathology_weight < 0 or fixed_genomic_weight < 0:
+            raise ValueError("Fixed modality weights must be non-negative")
+        if abs(fixed_pathology_weight + fixed_genomic_weight - 1.0) > 1e-8:
+            raise ValueError("Fixed modality weights must sum to one")
+        self.graph_type = graph_type
+        self.hyperedge_mode = hyperedge_mode
+        self.weighting_mode = weighting_mode
 
         ###
         self.size_dict = {
@@ -80,20 +158,40 @@ class MRePath(nn.Module):
             fc.append(nn.ReLU6())
             fc.append(nn.Dropout(0.25))
         self.pathomics_fc = nn.Sequential(*fc)
-        self.graph_type = graph_type
-        
-        if self.graph_type == "HGNN":
+        if self.graph_type == "shgnn":
             self.sheaf_builder = SheafBuilderGeneral()
             self.convs=nn.ModuleList()
             # Sheaf Diffusion layers
             for _ in range(3):
                 self.convs.append(HyperDiffusionGeneralSheafConv(256, 256, d=1, device='cuda'))
-        elif self.graph_type == "GCN":
+        elif self.graph_type == "hgnn":
+            self.convs = nn.ModuleList(
+                [
+                    HGNNPConv(256, 256, drop_rate=0.25),
+                    HGNNPConv(256, 256, drop_rate=0.25),
+                    HGNNPConv(256, 256, drop_rate=0.0, is_last=True),
+                ]
+            )
+        elif self.graph_type == "gcn":
             from torch_geometric.nn.models import GCN
-            self.graph = GCN(in_channels=256, hidden_channels=512, out_channels=256, num_layers=3, dropout=0.25).to("cuda")
-        elif self.graph_type == "GAT":
+
+            self.graph = GCN(
+                in_channels=256,
+                hidden_channels=512,
+                out_channels=256,
+                num_layers=3,
+                dropout=0.25,
+            )
+        elif self.graph_type == "gat":
             from torch_geometric.nn.models import GAT
-            self.graph = GAT(in_channels=256, hidden_channels=512, out_channels=256, num_layers=3, dropout=0.25).to("cuda")                           
+
+            self.graph = GAT(
+                in_channels=256,
+                hidden_channels=512,
+                out_channels=256,
+                num_layers=3,
+                dropout=0.25,
+            )
         
         # Genomic Embedding Network
         hidden = self.size_dict["genomics"][model_size]
@@ -104,21 +202,36 @@ class MRePath(nn.Module):
                 fc_omic.append(SNN_Block(dim1=hidden[i], dim2=hidden[i + 1], dropout=0.25))
             sig_networks.append(nn.Sequential(*fc_omic))
         self.genomics_fc = nn.ModuleList(sig_networks)
+        self.gene_aggregator = GeneGraphAggregator(
+            embedding_dim=hidden[-1], method=gene_aggregation
+        )
        
         
         # Modality rebalance from Eq. (7)-(9).
         g_dim = self.size_dict["genomics"][model_size][-1]
         g_num = 6
-        self.dynamic_weighting = DynamicWeighting(
-            embedding_dim=g_dim,
-            num_pathways=g_num,
-            num_patches=num_patches,
+        if self.weighting_mode == "dynamic":
+            self.dynamic_weighting = DynamicWeighting(
+                embedding_dim=g_dim,
+                num_pathways=g_num,
+                num_patches=num_patches,
+            )
+        else:
+            self.dynamic_weighting = None
+        self.register_buffer(
+            "fixed_modality_weights",
+            torch.tensor(
+                [[fixed_pathology_weight, fixed_genomic_weight]],
+                dtype=torch.float32,
+            ),
+            persistent=True,
         )
-        
+
         self.attention_fusion = AlignFusion(
             embedding_dim=g_dim,
             num_heads = 4,
-            num_pathways = g_num
+            num_pathways = g_num,
+            variant=fusion_variant,
         )
 
         # Classification Layer
@@ -132,9 +245,10 @@ class MRePath(nn.Module):
     def forward(self, **kwargs):
         x_path = kwargs["x_path"]
         x_omic = [kwargs["x_omic%d" % i] for i in range(1, 7)]
-        
+
         genomics_features = [self.genomics_fc[idx].forward(sig_feat) for idx, sig_feat in enumerate(x_omic)]
         genomics_features = torch.stack(genomics_features).unsqueeze(0)  # [1, 6, 1024]
+        genomics_features = self.gene_aggregator(genomics_features)
         pathomics_features = self.pathomics_fc(x_path)
         if pathomics_features.ndim == 3:
             if pathomics_features.shape[0] != 1:
@@ -146,43 +260,62 @@ class MRePath(nn.Module):
         edge_index = graph.edge_index
         edge_latent = graph.edge_latent
 
-        # sheaf hypergraph
+        # Build the exact graph or hypergraph family selected by the paper
+        # ablation. GAT/GCN consume ordinary pairwise edges; HGNN/SHGNN
+        # convert the selected neighborhoods into hyperedges.
         has_hyperedges = False
-        if self.graph_type == "HGNN":
-          if edge_index.shape[1]+edge_latent.shape[1]>0:
-              hyper_index = self.get_hyperedge(edge_index)
-              hyper_latent = self.get_hyperedge(edge_latent)
+        selected_edges = []
+        if self.hyperedge_mode in {"topology", "both"}:
+            selected_edges.append(edge_index)
+        if self.hyperedge_mode in {"feature", "both"}:
+            selected_edges.append(edge_latent)
 
-              hyperedges = hyper_index + hyper_latent
-              if hyperedges:
-                  hg = dhg.Hypergraph(
-                      num_v=pathomics_features.shape[0], e_list=hyperedges
-                  )
-                  H = hg.H.coalesce().indices().long().to(
-                      pathomics_features.device
-                  )
-                  if H.numel() > 0:
-                      hyperedge_attr = self.init_hyperedge_attr(
-                          x=pathomics_features, hyperedge_index=H
-                      )
-                      num_nodes = pathomics_features.shape[0]
-                      num_edges = H[1].max().item() + 1
-                      has_hyperedges = True
-        else:
-            edge_total = torch.cat((edge_index, edge_latent), dim=1).to(
+        if self.graph_type in {"hgnn", "shgnn"} and selected_edges:
+            hyperedges = []
+            for edges in selected_edges:
+                hyperedges.extend(self.get_hyperedge(edges))
+            if hyperedges:
+                hg = dhg.Hypergraph(
+                    num_v=pathomics_features.shape[0],
+                    e_list=hyperedges,
+                    device=pathomics_features.device,
+                )
+                has_hyperedges = hg.num_e > 0
+                if self.graph_type == "shgnn" and has_hyperedges:
+                    H = hg.H.coalesce().indices().long().to(
+                        pathomics_features.device
+                    )
+                    hyperedge_attr = self.init_hyperedge_attr(
+                        x=pathomics_features, hyperedge_index=H
+                    )
+                    num_nodes = pathomics_features.shape[0]
+                    num_edges = H[1].max().item() + 1
+        elif self.graph_type in {"gcn", "gat"} and selected_edges:
+            edge_total = torch.cat(selected_edges, dim=1).to(
                 pathomics_features.device
+            )
+        else:
+            edge_total = torch.empty(
+                (2, 0), dtype=torch.long, device=pathomics_features.device
             )
 
         # Algorithm 1 computes weights from encoded raw pathology P and
         # genomics G, then applies them to high-order pathology Ph and G.
-        weights, confidence = self.dynamic_weighting(
-            pathomics_features.unsqueeze(0), genomics_features
-        )
+        if self.dynamic_weighting is not None:
+            weights, confidence = self.dynamic_weighting(
+                pathomics_features.unsqueeze(0), genomics_features
+            )
+        else:
+            weights = self.fixed_modality_weights.to(
+                device=pathomics_features.device,
+                dtype=pathomics_features.dtype,
+            )
+            confidence = ()
         self.last_modality_weights = weights.detach()
         self.last_confidence = tuple(value.detach() for value in confidence)
-                
-        # three layers hypergraph convolution
-        if self.graph_type=="HGNN":
+
+        # Pathology aggregation.
+        if self.graph_type == "shgnn":
             if has_hyperedges:
                 for i, conv in enumerate(self.convs[:-1]):
                     if i == 0:
@@ -208,8 +341,17 @@ class MRePath(nn.Module):
                     num_edges=num_edges,
                 )
             pathomics_features = pathomics_features.view(-1, 256).unsqueeze(0) # Nd x out_channels -> Nx(d*out_channels)
+        elif self.graph_type == "hgnn":
+            if has_hyperedges:
+                for conv in self.convs:
+                    pathomics_features = conv(pathomics_features, hg)
+            pathomics_features = pathomics_features.unsqueeze(0)
+        elif self.graph_type in {"gcn", "gat"}:
+            if edge_total.numel() > 0:
+                pathomics_features = self.graph(pathomics_features, edge_total)
+            pathomics_features = pathomics_features.unsqueeze(0)
         else:
-            pathomics_features = self.graph(pathomics_features, edge_total).unsqueeze(0)
+            pathomics_features = pathomics_features.unsqueeze(0)
 
         pathomics_features = pathomics_features * weights[:, 0].view(-1, 1, 1)
         genomics_features = genomics_features * weights[:, 1].view(-1, 1, 1)

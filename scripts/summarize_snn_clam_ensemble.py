@@ -50,11 +50,17 @@ def main() -> None:
     for fold in range(args.folds):
         snn = load(locate(args.snn_root, fold))
         clam = load(locate(args.clam_root, fold))
-        case_ids = sorted(set(snn) & set(clam))
-        if len(case_ids) < 50:
+        snn_case_ids = set(snn)
+        clam_case_ids = set(clam)
+        if snn_case_ids != clam_case_ids:
             raise RuntimeError(
-                f"Fold {fold} has only {len(case_ids)} aligned validation cases."
+                f"Fold {fold} case mismatch: "
+                f"SNN-only={sorted(snn_case_ids - clam_case_ids)}, "
+                f"CLAM-only={sorted(clam_case_ids - snn_case_ids)}"
             )
+        case_ids = sorted(snn_case_ids)
+        if not case_ids:
+            raise RuntimeError(f"Fold {fold} has no validation cases.")
 
         rows = []
         for case_id in case_ids:

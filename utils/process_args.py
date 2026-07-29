@@ -76,11 +76,54 @@ def _process_args():
     parser.add_argument('--modality', type=str, default="wsi")
     parser.add_argument('--encoding_dim', type=int, default=768, help='WSI encoding dim')
     parser.add_argument('--use_nystrom', action='store_true', default=False, help='Use Nystrom attentin in SurvPath.')
+    parser.add_argument(
+        '--mrepath_graph_type',
+        choices=['mlp', 'gat', 'gcn', 'hgnn', 'shgnn'],
+        default='shgnn',
+        help='Pathology aggregator used by the MRePath hypergraph ablation.',
+    )
+    parser.add_argument(
+        '--mrepath_hyperedges',
+        choices=['none', 'topology', 'feature', 'both'],
+        default='both',
+        help='Hyperedge family used by HGNN/SHGNN.',
+    )
+    parser.add_argument(
+        '--mrepath_weighting',
+        choices=['dynamic', 'fixed'],
+        default='dynamic',
+        help='Dynamic paper weighting or a fixed pathology/genomics pair.',
+    )
+    parser.add_argument('--mrepath_path_weight', type=float, default=0.5)
+    parser.add_argument('--mrepath_gene_weight', type=float, default=0.5)
+    parser.add_argument(
+        '--mrepath_fusion',
+        choices=['ifa', 'pg_gp', 'sa_pg', 'sa_gp'],
+        default='ifa',
+        help='Interactive-alignment fusion variant from the paper ablation.',
+    )
+    parser.add_argument(
+        '--mrepath_gene_aggregation',
+        choices=['default', 'gcn', 'gat'],
+        default='default',
+        help='Six-signature genomic aggregation variant from Table 10.',
+    )
+    parser.add_argument(
+        '--mrepath_encoder',
+        choices=['resnet50', 'uni', 'conch', 'phikon2', 'ctranspath'],
+        default='resnet50',
+        help='Bookkeeping label for the pathology feature encoder ablation.',
+    )
 
     args = parser.parse_args()
 
     if not (args.task == "survival"):
         print("Task and folder does not match")
         exit()
+    if args.mrepath_weighting == 'fixed':
+        if args.mrepath_path_weight < 0 or args.mrepath_gene_weight < 0:
+            parser.error('fixed modality weights must be non-negative')
+        if abs(args.mrepath_path_weight + args.mrepath_gene_weight - 1.0) > 1e-8:
+            parser.error('fixed pathology and gene weights must sum to 1')
 
     return args

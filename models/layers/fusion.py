@@ -66,9 +66,19 @@ class AlignFusion(nn.Module):
     pooling.
     """
 
-    def __init__(self, embedding_dim: int, num_heads: int, mlp_dim=512, num_pathways=6):
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_dim=512,
+        num_pathways=6,
+        variant="ifa",
+    ):
         super().__init__()
+        if variant not in {"ifa", "pg_gp", "sa_pg", "sa_gp"}:
+            raise ValueError(f"Unknown interactive-alignment variant: {variant}")
         self.num_pathways = num_pathways
+        self.variant = variant
         self.genomic_self_attn = Attention(embedding_dim, num_heads)
         self.genomic_self_norm = nn.LayerNorm(embedding_dim)
         self.pathology_guided_genomic_attn = Attention(embedding_dim, num_heads)
@@ -84,22 +94,35 @@ class AlignFusion(nn.Module):
                 f"expected {self.num_pathways} genomic groups, got {genomics.shape[1]}"
             )
 
-        genomic_self = self.genomic_self_norm(
-            genomics
-            + self.genomic_self_attn(q=genomics, k=genomics, v=genomics)
-        )
-        genomic_fused = self.genomic_cross_norm(
-            genomic_self
-            + self.pathology_guided_genomic_attn(
-                q=genomic_self, k=pathology, v=pathology
+        use_self_attention = self.variant in {"ifa", "sa_pg", "sa_gp"}
+        use_pathology_guidance = self.variant in {"ifa", "pg_gp", "sa_pg"}
+        use_genomic_guidance = self.variant in {"ifa", "pg_gp", "sa_gp"}
+
+        if use_self_attention:
+            genomic_fused = self.genomic_self_norm(
+                genomics
+                + self.genomic_self_attn(q=genomics, k=genomics, v=genomics)
             )
-        )
-        pathology_fused = self.pathology_cross_norm(
-            pathology
-            + self.genomic_guided_pathology_attn(
-                q=pathology, k=genomic_fused, v=genomic_fused
+        else:
+            genomic_fused = genomics
+
+        if use_pathology_guidance:
+            genomic_fused = self.genomic_cross_norm(
+                genomic_fused
+                + self.pathology_guided_genomic_attn(
+                    q=genomic_fused, k=pathology, v=pathology
+                )
             )
-        )
+
+        if use_genomic_guidance:
+            pathology_fused = self.pathology_cross_norm(
+                pathology
+                + self.genomic_guided_pathology_attn(
+                    q=pathology, k=genomic_fused, v=genomic_fused
+                )
+            )
+        else:
+            pathology_fused = pathology
         return pathology_fused, genomic_fused
 class MLPBlock(nn.Module):
     def __init__(

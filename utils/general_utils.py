@@ -73,6 +73,14 @@ def _prepare_for_experiment(args):
         'warmup_epochs': args.warmup_epochs,
         'checkpoint_selection': args.checkpoint_selection,
         'seed': args.seed,
+        'mrepath_graph_type': args.mrepath_graph_type,
+        'mrepath_hyperedges': args.mrepath_hyperedges,
+        'mrepath_weighting': args.mrepath_weighting,
+        'mrepath_path_weight': args.mrepath_path_weight,
+        'mrepath_gene_weight': args.mrepath_gene_weight,
+        'mrepath_fusion': args.mrepath_fusion,
+        'mrepath_gene_aggregation': args.mrepath_gene_aggregation,
+        'mrepath_encoder': args.mrepath_encoder,
         'torch_version': torch.__version__,
         'cuda_version': torch.version.cuda,
     }
@@ -160,6 +168,22 @@ def _get_custom_exp_code(args):
     param_code += "_fusion_" + str(args.fusion)
     param_code += "_modality_" + str(args.modality)
     param_code += "_pathT_" + str(args.type_of_path)
+    if args.modality == "hgnn":
+        weight_code = args.mrepath_weighting
+        if args.mrepath_weighting == "fixed":
+            weight_code = (
+                f"f{args.mrepath_path_weight:g}-{args.mrepath_gene_weight:g}"
+            )
+        # Both the result directory and model/settings filenames contain this
+        # code. Keep it well below the 255-byte filename limit.
+        param_code = (
+            f"{args.study}_mre_{args.label_col}_{args.encoding_dim}d_"
+            f"{args.num_patches}p_{args.max_epochs}e_"
+            f"g-{args.mrepath_graph_type}_he-{args.mrepath_hyperedges}_"
+            f"w-{weight_code}_f-{args.mrepath_fusion}_"
+            f"ga-{args.mrepath_gene_aggregation}_"
+            f"enc-{args.mrepath_encoder}"
+        )
 
     #----> Updating
     args.param_code = param_code

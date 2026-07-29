@@ -1,0 +1,166 @@
+{
+  "paper_scope": "MRePath COREAD one-factor-at-a-time ablations from Tables 5-10",
+  "shared_reference": {
+    "graph_type": "shgnn",
+    "hyperedges": "both",
+    "graph_k": 9,
+    "weighting": "dynamic",
+    "fusion": "ifa",
+    "gene_aggregation": "default",
+    "encoder": "resnet50"
+  },
+  "aliases": {
+    "table6_k0": "graph_mlp",
+    "table6_k9": "full_reference",
+    "table9_dynamic": "full_reference",
+    "table10_default": "full_reference"
+  },
+  "configs": [
+    {
+      "name": "full_reference",
+      "group": "reference",
+      "graph_type": "shgnn",
+      "hyperedges": "both",
+      "graph_k": 9,
+      "weighting": "dynamic",
+      "fusion": "ifa",
+      "gene_aggregation": "default",
+      "encoder": "resnet50"
+    },
+    {
+      "name": "graph_mlp",
+      "group": "hypergraph",
+      "graph_type": "mlp",
+      "hyperedges": "none"
+    },
+    {
+      "name": "graph_gat",
+      "group": "hypergraph",
+      "graph_type": "gat",
+      "hyperedges": "both"
+    },
+    {
+      "name": "graph_gcn",
+      "group": "hypergraph",
+      "graph_type": "gcn",
+      "hyperedges": "both"
+    },
+    {
+      "name": "graph_hgnn_both",
+      "group": "hypergraph",
+      "graph_type": "hgnn",
+      "hyperedges": "both"
+    },
+    {
+      "name": "graph_shgnn_topology",
+      "group": "hypergraph",
+      "graph_type": "shgnn",
+      "hyperedges": "topology"
+    },
+    {
+      "name": "graph_shgnn_feature",
+      "group": "hypergraph",
+      "graph_type": "shgnn",
+      "hyperedges": "feature"
+    },
+    {
+      "name": "graph_k5",
+      "group": "hyperedge_k",
+      "graph_k": 5
+    },
+    {
+      "name": "graph_k25",
+      "group": "hyperedge_k",
+      "graph_k": 25
+    },
+    {
+      "name": "graph_k49",
+      "group": "hyperedge_k",
+      "graph_k": 49
+    },
+    {
+      "name": "weight_fixed_50_50",
+      "group": "modality_rebalance",
+      "weighting": "fixed",
+      "path_weight": 0.5,
+      "gene_weight": 0.5
+    },
+    {
+      "name": "weight_fixed_70_30",
+      "group": "modality_rebalance",
+      "weighting": "fixed",
+      "path_weight": 0.7,
+      "gene_weight": 0.3
+    },
+    {
+      "name": "weight_fixed_30_70",
+      "group": "modality_rebalance",
+      "weighting": "fixed",
+      "path_weight": 0.3,
+      "gene_weight": 0.7
+    },
+    {
+      "name": "weight_fixed_95_05",
+      "group": "modality_rebalance",
+      "weighting": "fixed",
+      "path_weight": 0.95,
+      "gene_weight": 0.05
+    },
+    {
+      "name": "weight_fixed_05_95",
+      "group": "modality_rebalance",
+      "weighting": "fixed",
+      "path_weight": 0.05,
+      "gene_weight": 0.95
+    },
+    {
+      "name": "fusion_pg_gp",
+      "group": "modality_rebalance",
+      "fusion": "pg_gp"
+    },
+    {
+      "name": "fusion_sa_pg",
+      "group": "modality_rebalance",
+      "fusion": "sa_pg"
+    },
+    {
+      "name": "fusion_sa_gp",
+      "group": "modality_rebalance",
+      "fusion": "sa_gp"
+    },
+    {
+      "name": "encoder_uni",
+      "group": "pathology_encoder",
+      "encoder": "uni",
+      "encoding_dim": 1024
+    },
+    {
+      "name": "encoder_conch",
+      "group": "pathology_encoder",
+      "encoder": "conch",
+      "encoding_dim": 512
+    },
+    {
+      "name": "encoder_phikon2",
+      "group": "pathology_encoder",
+      "encoder": "phikon2",
+      "encoding_dim": 1024
+    },
+    {
+      "name": "encoder_ctranspath",
+      "group": "pathology_encoder",
+      "encoder": "ctranspath",
+      "encoding_dim": 768
+    },
+    {
+      "name": "gene_gcn",
+      "group": "genomic_aggregation",
+      "gene_aggregation": "gcn"
+    },
+    {
+      "name": "gene_gat",
+      "group": "genomic_aggregation",
+      "gene_aggregation": "gat"
+    }
+  ]
+}
