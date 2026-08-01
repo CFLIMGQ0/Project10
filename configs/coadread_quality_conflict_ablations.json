@@ -1,0 +1,67 @@
+{
+  "scope": "Quality/conflict-aware MRePath ablations from MRePath_潜在问题发现与验证方案.docx Table 3",
+  "shared_reference": {
+    "graph_type": "shgnn",
+    "hyperedges": "both",
+    "graph_k": 9,
+    "weighting": "dynamic",
+    "fusion": "ifa",
+    "gene_aggregation": "default",
+    "encoder": "resnet50",
+    "rebalance_variant": "original",
+    "modality_dropout": 0.0,
+    "monotonicity_weight": 0.0,
+    "monotonicity_margin": 0.02,
+    "unimodal_loss_weight": 0.0,
+    "mismatch_loss_weight": 0.0
+  },
+  "configs": [
+    {
+      "name": "original_mrepath",
+      "group": "quality_conflict_ablation"
+    },
+    {
+      "name": "quality_only",
+      "group": "quality_conflict_ablation",
+      "rebalance_variant": "quality",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2
+    },
+    {
+      "name": "conflict_only",
+      "group": "quality_conflict_ablation",
+      "rebalance_variant": "conflict",
+      "modality_dropout": 0.2,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "quality_conflict",
+      "group": "quality_conflict_ablation",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "quality_conflict_no_modality_dropout",
+      "group": "quality_conflict_ablation",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.0,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "quality_conflict_no_monotonicity",
+      "group": "quality_conflict_ablation",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.0,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    }
+  ]
+}

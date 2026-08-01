@@ -54,6 +54,15 @@ def _process_args():
         default=False,
         help='randomly sample validation WSI bags like the released loader',
     )
+    parser.add_argument(
+        '--mrepath_hypergraph_cache_dir',
+        type=str,
+        default=None,
+        help=(
+            'Optional persistent topology/feature incidence cache directory '
+            'for HGNN and SHGNN.'
+        ),
+    )
     parser.add_argument('--batch_size', type=int, default=1, help='batch_size')
     parser.add_argument('--num_workers', type=int, default=0,
                         help='data loader workers; use 0 for stable WSL/NTFS graph loading')
@@ -104,9 +113,56 @@ def _process_args():
     )
     parser.add_argument(
         '--mrepath_gene_aggregation',
-        choices=['default', 'gcn', 'gat'],
+        choices=['default', 'gcn', 'gat', 'kan'],
         default='default',
-        help='Six-signature genomic aggregation variant from Table 10.',
+        help=(
+            'Six-signature genomic aggregation variant; default/gcn/gat are '
+            'paper variants and kan is an experimental extension.'
+        ),
+    )
+    parser.add_argument(
+        '--mrepath_genomic_encoder',
+        choices=[
+            'original', 'pb_tamlu', 'do_la', 'jc_moa',
+            'tc_rbf_kan', 'dd_kac',
+        ],
+        default='original',
+        help='Pathway-wise genomic encoder; improved variants preserve six tokens.',
+    )
+    parser.add_argument(
+        '--mrepath_rebalance_variant',
+        choices=['original', 'quality', 'conflict', 'quality_conflict'],
+        default='original',
+        help='Original equations or the quality/conflict-aware extension.',
+    )
+    parser.add_argument(
+        '--mrepath_modality_dropout',
+        type=float,
+        default=0.0,
+        help='Training probability of dropping pathology or genomics.',
+    )
+    parser.add_argument(
+        '--mrepath_monotonicity_weight',
+        type=float,
+        default=0.0,
+        help='Weight of the reliability monotonicity constraint.',
+    )
+    parser.add_argument(
+        '--mrepath_monotonicity_margin',
+        type=float,
+        default=0.02,
+    )
+    parser.add_argument(
+        '--mrepath_unimodal_loss_weight',
+        type=float,
+        default=0.0,
+        help='Weight of auxiliary pathology/genomics survival heads.',
+    )
+    parser.add_argument(
+        '--mrepath_mismatch_loss_weight',
+        type=float,
+        default=0.0,
+        help='Weight of the paired-vs-mismatched conflict objective.',
     )
     parser.add_argument(
         '--mrepath_encoder',
@@ -125,5 +181,14 @@ def _process_args():
             parser.error('fixed modality weights must be non-negative')
         if abs(args.mrepath_path_weight + args.mrepath_gene_weight - 1.0) > 1e-8:
             parser.error('fixed pathology and gene weights must sum to 1')
+    if not 0.0 <= args.mrepath_modality_dropout < 1.0:
+        parser.error('mrepath modality dropout must be in [0, 1)')
+    if min(
+        args.mrepath_monotonicity_weight,
+        args.mrepath_monotonicity_margin,
+        args.mrepath_unimodal_loss_weight,
+        args.mrepath_mismatch_loss_weight,
+    ) < 0:
+        parser.error('MRePath auxiliary loss values must be non-negative')
 
     return args

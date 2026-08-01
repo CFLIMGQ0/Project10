@@ -5,15 +5,9 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${PROJECT_DIR}/data/tcga_stad/gdc_manifest_tcga_stad_mrepath.tsv"
 OUTPUT_DIR="${PROJECT_DIR}/data/tcga_stad/raw_svs"
 GDC_CLIENT="${PROJECT_DIR}/tools/gdc-client-2.3.0/gdc-client"
-LOCAL_IPV4_PROXY="http://127.0.0.1:18080"
-
-export HTTP_PROXY="${LOCAL_IPV4_PROXY}"
-export HTTPS_PROXY="${LOCAL_IPV4_PROXY}"
-export http_proxy="${LOCAL_IPV4_PROXY}"
-export https_proxy="${LOCAL_IPV4_PROXY}"
-export NO_PROXY=""
-export no_proxy=""
-unset ALL_PROXY all_proxy
+# Download directly from GDC. Do not consume traffic from a desktop/VPN proxy.
+unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy
+unset ALL_PROXY all_proxy NO_PROXY no_proxy
 
 mapfile -t incomplete_ids < <(
   while IFS=$'\t' read -r file_id filename md5 size state; do

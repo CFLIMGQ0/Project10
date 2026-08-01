@@ -1,0 +1,26 @@
+{
+  "scope": "MRePath COREAD combined candidates selected after one-factor ablations",
+  "shared_reference": {
+    "graph_type": "shgnn",
+    "hyperedges": "both",
+    "graph_k": 9,
+    "weighting": "dynamic",
+    "fusion": "ifa",
+    "gene_aggregation": "default",
+    "encoder": "resnet50"
+  },
+  "configs": [
+    {
+      "name": "hgnn_gene_gcn",
+      "group": "combined_candidate",
+      "graph_type": "hgnn",
+      "hyperedges": "both",
+      "graph_k": 9,
+      "weighting": "dynamic",
+      "fusion": "ifa",
+      "gene_aggregation": "gcn",
+      "encoder": "resnet50",
+      "encoding_dim": 1024
+    }
+  ]
+}

@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from utils.general_utils import _series_intersection
+from utils.hypergraph_cache import load_cache_record, subset_incidence
 
 
 ALL_MODALITIES = ['rna_clean.csv']  
@@ -595,7 +596,10 @@ class SurvivalDatasetFactory:
             clinical_data = clinical_data_for_split,
             num_patches = self.num_patches,
             omic_names = self.omic_names,
-            sample=sample
+            sample=sample,
+            hypergraph_cache_dir=getattr(
+                args, "mrepath_hypergraph_cache_dir", None
+            ),
             )
 
         if split_key == "train":
@@ -627,6 +631,7 @@ class SurvivalDataset(Dataset):
         num_patches=4000,
         omic_names=None,
         sample=True,
+        hypergraph_cache_dir=None,
         ): 
 
         super(SurvivalDataset, self).__init__()
@@ -650,6 +655,7 @@ class SurvivalDataset(Dataset):
         self.omic_names = omic_names
         self.num_pathways = len(omic_names)
         self.sample = sample
+        self.hypergraph_cache_dir = hypergraph_cache_dir
 
         # for weighted sampling
         self.slide_cls_id_prep()
@@ -718,7 +724,9 @@ class SurvivalDataset(Dataset):
 
         elif self.modality in ["coattn", "coattn_motcat","hgnn"]:
             
-            patch_features, graph = self._load_wsi_embs_from_path(self.data_dir, slide_ids)
+            patch_features, graph = self._load_wsi_embs_from_path(
+                self.data_dir, slide_ids, case_id=case_id
+            )
             #print(graph)
             #print(self.omic_names)
             #print(self.omics_data_dict["rna"])
@@ -782,7 +790,7 @@ class SurvivalDataset(Dataset):
 
         return label, event_time, c, slide_ids, clinical_data, case_id
     
-    def _load_wsi_embs_from_path(self, data_dir, slide_ids):
+    def _load_wsi_embs_from_path(self, data_dir, slide_ids, case_id=None):
         """
         Load all the patch embeddings from a list a slide IDs. 
 
@@ -798,8 +806,12 @@ class SurvivalDataset(Dataset):
         """
         all_features = []
         all_edges = {'index': [], 'latent': [], 'hyp': []}
+        all_cached_incidence = {'topology': [], 'feature': []}
+        all_cached_centers = {'topology': [], 'feature': []}
+        cached_hyperedge_offsets = {'topology': 0, 'feature': 0}
         node_offsets = [0]  # 
         load_errors = []
+        use_hypergraph_cache = self.hypergraph_cache_dir is not None
     
         for slide_id in slide_ids:
             try:
@@ -815,14 +827,33 @@ class SurvivalDataset(Dataset):
                 )
         
                 current_nodes = graph.x.size(0)
+                current_node_offset = node_offsets[-1]
                 node_offsets.append(node_offsets[-1] + current_nodes)
             
                 all_features.append(graph.x)
-                for edge_type in ['index', 'latent']:
-                    edges = getattr(graph, f'edge_{edge_type}')
-                    if node_offsets[-2]:
-                        edges = edges + node_offsets[-2]
-                    all_edges[edge_type].append(edges)
+                if use_hypergraph_cache:
+                    cache = load_cache_record(
+                        graph_path, self.hypergraph_cache_dir
+                    )
+                    if cache["num_nodes"] != current_nodes:
+                        raise RuntimeError(
+                            f"Node-count mismatch in cache for {slide_id}"
+                        )
+                    for cache_name in ("topology", "feature"):
+                        incidence = cache[cache_name]["incidence"].clone()
+                        centers = cache[cache_name]["centers"].clone()
+                        incidence[0] += current_node_offset
+                        incidence[1] += cached_hyperedge_offsets[cache_name]
+                        centers += current_node_offset
+                        all_cached_incidence[cache_name].append(incidence)
+                        all_cached_centers[cache_name].append(centers)
+                        cached_hyperedge_offsets[cache_name] += centers.numel()
+                else:
+                    for edge_type in ['index', 'latent']:
+                        edges = getattr(graph, f'edge_{edge_type}')
+                        if node_offsets[-2]:
+                            edges = edges + node_offsets[-2]
+                        all_edges[edge_type].append(edges)
                 
             except Exception as e:
                 load_errors.append(
@@ -854,14 +885,40 @@ class SurvivalDataset(Dataset):
         else:
             selected_indices = torch.arange(len(global_features))
     
-        selected_set = set(selected_indices.tolist())
         global_graph = Data(
             x=torch.nan_to_num(global_features[selected_indices], nan=0.0)
         )
         # index_mapping = {old: new for new, old in enumerate(selected_indices.tolist())}
 
-        for edge_type in ['index', 'latent']:
-            setattr(global_graph, f'edge_{edge_type}', self.process_edge_type(all_edges[edge_type], selected_indices))
+        if use_hypergraph_cache:
+            for cache_name in ("topology", "feature"):
+                incidence = torch.cat(
+                    all_cached_incidence[cache_name], dim=1
+                )
+                centers = torch.cat(all_cached_centers[cache_name])
+                selected_incidence = subset_incidence(
+                    incidence=incidence,
+                    centers=centers,
+                    selected_nodes=selected_indices,
+                    num_source_nodes=len(global_features),
+                )
+                setattr(
+                    global_graph,
+                    f"hyperedge_{cache_name}",
+                    selected_incidence,
+                )
+            global_graph.edge_index = torch.empty((2, 0), dtype=torch.long)
+            global_graph.edge_latent = torch.empty((2, 0), dtype=torch.long)
+            global_graph.hypergraph_cache_case = case_id
+        else:
+            for edge_type in ['index', 'latent']:
+                setattr(
+                    global_graph,
+                    f'edge_{edge_type}',
+                    self.process_edge_type(
+                        all_edges[edge_type], selected_indices
+                    ),
+                )
         '''slide_id = slide_ids[0][:12]
         try:
             graph_path = os.path.join(data_dir, f"{slide_id.rstrip('.svs')[0:12]}.pt")

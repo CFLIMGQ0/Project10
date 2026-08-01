@@ -49,17 +49,28 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["smoke", "formal"], required=True)
     parser.add_argument(
+        "--matrix",
+        type=Path,
+        default=MATRIX_PATH,
+        help="Ablation or combined-candidate JSON matrix to run.",
+    )
+    parser.add_argument(
         "--results-root",
         default="results_coadread_paper_ablations_20260726",
     )
     parser.add_argument("--only", nargs="*", default=[])
     parser.add_argument("--include-reference", action="store_true")
+    parser.add_argument(
+        "--disable-hypergraph-cache",
+        action="store_true",
+        help="Use the original online DHG hypergraph construction path.",
+    )
     parser.add_argument("--fail-fast", action="store_true")
     return parser.parse_args()
 
 
-def load_configs() -> list[dict]:
-    matrix = json.loads(MATRIX_PATH.read_text())
+def load_configs(matrix_path: Path = MATRIX_PATH) -> list[dict]:
+    matrix = json.loads(matrix_path.read_text())
     reference = matrix["shared_reference"]
     configs = []
     for entry in matrix["configs"]:
@@ -74,6 +85,22 @@ def load_configs() -> list[dict]:
             "gene_aggregation": reference["gene_aggregation"],
             "encoder": reference["encoder"],
             "encoding_dim": 1024,
+            "rebalance_variant": reference.get(
+                "rebalance_variant", "original"
+            ),
+            "modality_dropout": reference.get("modality_dropout", 0.0),
+            "monotonicity_weight": reference.get(
+                "monotonicity_weight", 0.0
+            ),
+            "monotonicity_margin": reference.get(
+                "monotonicity_margin", 0.02
+            ),
+            "unimodal_loss_weight": reference.get(
+                "unimodal_loss_weight", 0.0
+            ),
+            "mismatch_loss_weight": reference.get(
+                "mismatch_loss_weight", 0.0
+            ),
         }
         merged.update(entry)
         configs.append(merged)
@@ -120,9 +147,10 @@ def command_for(
     results_root: str,
     fold: int,
     mode: str,
+    use_hypergraph_cache: bool = True,
 ) -> list[str]:
     smoke = mode == "smoke"
-    return [
+    command = [
         str(DEFAULT_PYTHON),
         "main.py",
         "--study",
@@ -201,7 +229,27 @@ def command_for(
         config["gene_aggregation"],
         "--mrepath_encoder",
         config["encoder"],
+        "--mrepath_rebalance_variant",
+        config["rebalance_variant"],
+        "--mrepath_modality_dropout",
+        str(config["modality_dropout"]),
+        "--mrepath_monotonicity_weight",
+        str(config["monotonicity_weight"]),
+        "--mrepath_monotonicity_margin",
+        str(config["monotonicity_margin"]),
+        "--mrepath_unimodal_loss_weight",
+        str(config["unimodal_loss_weight"]),
+        "--mrepath_mismatch_loss_weight",
+        str(config["mismatch_loss_weight"]),
     ]
+    if use_hypergraph_cache and config["graph_type"] in {"hgnn", "shgnn"}:
+        command.extend(
+            [
+                "--mrepath_hypergraph_cache_dir",
+                str(data_root(config) / "hypergraph_cache"),
+            ]
+        )
+    return command
 
 
 def main() -> int:
@@ -211,7 +259,7 @@ def main() -> int:
         if args.mode == "smoke" and not args.results_root.endswith("_smoke")
         else args.results_root
     )
-    configs = load_configs()
+    configs = load_configs(args.matrix)
     if args.only:
         requested = set(args.only)
         configs = [config for config in configs if config["name"] in requested]
@@ -245,7 +293,13 @@ def main() -> int:
             if fold in done:
                 print(f"[skip] {name} fold={fold}", flush=True)
                 continue
-            command = command_for(config, results_root, fold, args.mode)
+            command = command_for(
+                config,
+                results_root,
+                fold,
+                args.mode,
+                use_hypergraph_cache=not args.disable_hypergraph_cache,
+            )
             print("[run] " + " ".join(command), flush=True)
             result = subprocess.run(command, cwd=ROOT)
             if result.returncode:

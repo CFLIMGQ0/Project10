@@ -69,6 +69,7 @@ def _prepare_for_experiment(args):
         'opt': args.opt,
         'weighted_sample': args.weighted_sample,
         'random_val_patches': args.random_val_patches,
+        'mrepath_hypergraph_cache_dir': args.mrepath_hypergraph_cache_dir,
         'lr_scheduler': args.lr_scheduler,
         'warmup_epochs': args.warmup_epochs,
         'checkpoint_selection': args.checkpoint_selection,
@@ -80,6 +81,13 @@ def _prepare_for_experiment(args):
         'mrepath_gene_weight': args.mrepath_gene_weight,
         'mrepath_fusion': args.mrepath_fusion,
         'mrepath_gene_aggregation': args.mrepath_gene_aggregation,
+        'mrepath_genomic_encoder': args.mrepath_genomic_encoder,
+        'mrepath_rebalance_variant': args.mrepath_rebalance_variant,
+        'mrepath_modality_dropout': args.mrepath_modality_dropout,
+        'mrepath_monotonicity_weight': args.mrepath_monotonicity_weight,
+        'mrepath_monotonicity_margin': args.mrepath_monotonicity_margin,
+        'mrepath_unimodal_loss_weight': args.mrepath_unimodal_loss_weight,
+        'mrepath_mismatch_loss_weight': args.mrepath_mismatch_loss_weight,
         'mrepath_encoder': args.mrepath_encoder,
         'torch_version': torch.__version__,
         'cuda_version': torch.version.cuda,
@@ -182,8 +190,10 @@ def _get_custom_exp_code(args):
             f"g-{args.mrepath_graph_type}_he-{args.mrepath_hyperedges}_"
             f"w-{weight_code}_f-{args.mrepath_fusion}_"
             f"ga-{args.mrepath_gene_aggregation}_"
-            f"enc-{args.mrepath_encoder}"
+            f"enc-{args.mrepath_encoder}_ge-{args.mrepath_genomic_encoder}"
         )
+        if args.mrepath_rebalance_variant != "original":
+            param_code += f"_rb-{args.mrepath_rebalance_variant}"
 
     #----> Updating
     args.param_code = param_code

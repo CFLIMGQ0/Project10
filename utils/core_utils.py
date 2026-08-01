@@ -1,4 +1,5 @@
 from ast import Lambda
+import json
 import numpy as np
 import pdb
 import os
@@ -212,6 +213,14 @@ def _init_model(args):
             'fixed_genomic_weight': args.mrepath_gene_weight,
             'fusion_variant': args.mrepath_fusion,
             'gene_aggregation': args.mrepath_gene_aggregation,
+            'genomic_encoder': args.mrepath_genomic_encoder,
+            'gene_graphs': getattr(args, 'mrepath_gene_graphs', None),
+            'rebalance_variant': args.mrepath_rebalance_variant,
+            'modality_dropout': args.mrepath_modality_dropout,
+            'monotonicity_weight': args.mrepath_monotonicity_weight,
+            'monotonicity_margin': args.mrepath_monotonicity_margin,
+            'unimodal_loss_weight': args.mrepath_unimodal_loss_weight,
+            'mismatch_loss_weight': args.mrepath_mismatch_loss_weight,
         }
         model = MRePath(**model_dict)
 
@@ -514,7 +523,33 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
 
         h, y_disc, event_time, censor, clinical_data_list = _process_data_and_forward(model, modality, device, data)
         #print()
-        loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor) 
+        loss = loss_fn(h=h, y=y_disc, t=event_time, c=censor)
+        auxiliary_loss = getattr(model, "auxiliary_loss", None)
+        if auxiliary_loss is not None:
+            loss = loss + auxiliary_loss
+        pathology_logits = getattr(model, "last_pathology_logits", None)
+        genomic_logits = getattr(model, "last_genomic_logits", None)
+        unimodal_weight = getattr(model, "unimodal_loss_weight", 0.0)
+        if (
+            unimodal_weight > 0.0
+            and pathology_logits is not None
+            and genomic_logits is not None
+        ):
+            unimodal_loss = 0.5 * (
+                loss_fn(
+                    h=pathology_logits,
+                    y=y_disc,
+                    t=event_time,
+                    c=censor,
+                )
+                + loss_fn(
+                    h=genomic_logits,
+                    y=y_disc,
+                    t=event_time,
+                    c=censor,
+                )
+            )
+            loss = loss + unimodal_weight * unimodal_loss
         #print(loss)
         loss_value = loss.item()
         loss = loss / y_disc.shape[0]
@@ -650,6 +685,10 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
     all_clinical_data = []
     all_logits = []
     all_slide_ids = []
+    all_modality_weights = []
+    all_rebalance_confidence = []
+    all_pathology_risk = []
+    all_genomic_risk = []
 
     slide_ids = loader.dataset.metadata['slide_id']
     count = 0
@@ -711,6 +750,36 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
                 clinical_data_list
             )
             all_logits.append(h.detach().cpu().numpy())
+            modality_weights = getattr(
+                model, "last_modality_weights", None
+            )
+            if modality_weights is None:
+                all_modality_weights.append([np.nan, np.nan])
+            else:
+                all_modality_weights.append(
+                    modality_weights.detach().cpu().numpy()[0].tolist()
+                )
+            confidence = getattr(model, "last_confidence", ())
+            all_rebalance_confidence.append(
+                [
+                    float(value.detach().cpu().reshape(-1)[0])
+                    for value in confidence
+                ]
+            )
+            pathology_logits = getattr(
+                model, "last_pathology_logits", None
+            )
+            genomic_logits = getattr(model, "last_genomic_logits", None)
+            if pathology_logits is None:
+                all_pathology_risk.append(np.nan)
+            else:
+                pathology_risk, _ = _calculate_risk(pathology_logits)
+                all_pathology_risk.append(float(pathology_risk[0]))
+            if genomic_logits is None:
+                all_genomic_risk.append(np.nan)
+            else:
+                genomic_risk, _ = _calculate_risk(genomic_logits)
+                all_genomic_risk.append(float(genomic_risk[0]))
             total_loss += loss_value
             all_slide_ids.append(slide_ids.values[count])
             count += 1
@@ -734,6 +803,17 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
         patient_results[case_id]["censorship"] = all_censorships[i]
         patient_results[case_id]["clinical"] = all_clinical_data[i]
         patient_results[case_id]["logits"] = all_logits[i]
+        patient_results[case_id]["pathology_weight"] = (
+            all_modality_weights[i][0]
+        )
+        patient_results[case_id]["genomic_weight"] = (
+            all_modality_weights[i][1]
+        )
+        patient_results[case_id]["rebalance_confidence"] = (
+            all_rebalance_confidence[i]
+        )
+        patient_results[case_id]["pathology_risk"] = all_pathology_risk[i]
+        patient_results[case_id]["genomic_risk"] = all_genomic_risk[i]
     
     c_index, c_index2, BS, IBS, iauc = _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores, all_censorships, all_event_times, all_risk_by_bin_scores)
 
@@ -865,6 +945,23 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
     if checkpoint_selection == "best":
         model.load_state_dict(torch.load(best_checkpoint_path, weights_only=True))
     results_dict, val_cindex, val_cindex_ipcw, _, _, _,val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
+    diagnostics = getattr(model, 'last_genomic_encoder_diagnostics', {})
+    if diagnostics:
+        serialized = {}
+        for name, value in diagnostics.items():
+            tensor = torch.as_tensor(value).detach().float().cpu()
+            serialized[name] = {
+                'shape': list(tensor.shape),
+                'mean': float(tensor.mean()),
+                'std': float(tensor.std(unbiased=False)),
+                'min': float(tensor.min()),
+                'max': float(tensor.max()),
+            }
+        with open(
+            os.path.join(args.results_dir, f's_{cur}_genomic_encoder_diagnostics.json'),
+            'w',
+        ) as handle:
+            json.dump(serialized, handle, indent=2)
     
     print(
         'Selected ({}) Val c-index: {:.4f}; best observed during training: {:.4f}'.format(
@@ -901,6 +998,11 @@ def _train_val(datasets, cur, args):
 
     #----> gets splits and summarize
     train_split, val_split = _get_splits(datasets, cur, args)
+
+    if args.mrepath_genomic_encoder == 'dd_kac':
+        args.mrepath_gene_graphs = _build_fold_gene_graphs(train_split)
+    else:
+        args.mrepath_gene_graphs = None
     
     #----> init loss function
     loss_fn = _init_loss_function(args)
@@ -921,3 +1023,29 @@ def _train_val(datasets, cur, args):
     results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss) = _step(cur, args, loss_fn, model, optimizer, lr_scheduler, train_loader, val_loader)
 
     return results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss)
+
+
+def _build_fold_gene_graphs(train_split, neighbours=8):
+    """Build pathway graphs from this fold's normalized training RNA only."""
+    rna = train_split.omics_data_dict['rna']
+    graphs = []
+    for genes in train_split.omic_names:
+        values = rna[list(genes)].to_numpy(dtype=np.float32, copy=True)
+        feature_count = values.shape[1]
+        if feature_count == 1:
+            graphs.append(torch.ones((1, 1), dtype=torch.float32))
+            continue
+        correlation = np.corrcoef(values, rowvar=False)
+        correlation = np.nan_to_num(
+            np.abs(correlation), nan=0.0, posinf=0.0, neginf=0.0
+        ).astype(np.float32)
+        np.fill_diagonal(correlation, 0.0)
+        keep = min(neighbours, feature_count - 1)
+        indices = np.argpartition(correlation, -keep, axis=1)[:, -keep:]
+        adjacency = np.zeros_like(correlation, dtype=np.float32)
+        rows = np.arange(feature_count)[:, None]
+        adjacency[rows, indices] = correlation[rows, indices]
+        adjacency = np.maximum(adjacency, adjacency.T)
+        np.fill_diagonal(adjacency, 1.0)
+        graphs.append(torch.from_numpy(adjacency))
+    return graphs

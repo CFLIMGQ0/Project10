@@ -1,0 +1,26 @@
+{
+  "scope": "Experimental COREAD candidate with HGNN pathology and KAN genomic aggregation",
+  "shared_reference": {
+    "graph_type": "shgnn",
+    "hyperedges": "both",
+    "graph_k": 9,
+    "weighting": "dynamic",
+    "fusion": "ifa",
+    "gene_aggregation": "default",
+    "encoder": "resnet50"
+  },
+  "configs": [
+    {
+      "name": "hgnn_gene_kan",
+      "group": "experimental_combined_candidate",
+      "graph_type": "hgnn",
+      "hyperedges": "both",
+      "graph_k": 9,
+      "weighting": "dynamic",
+      "fusion": "ifa",
+      "gene_aggregation": "kan",
+      "encoder": "resnet50",
+      "encoding_dim": 1024
+    }
+  ]
+}

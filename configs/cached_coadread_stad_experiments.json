@@ -1,0 +1,162 @@
+{
+  "description": "Cached COREAD/STAD base combinations and KAN reliability variants",
+  "datasets": {
+    "coadread": {
+      "study": "tcga_coadread",
+      "data_root": "data/tcga_coadread/clam_20x_resnet50_paper_k9",
+      "label_file": "datasets_csv/metadata/tcga_coadread.csv",
+      "omics_dir": "datasets_csv/raw_rna_data/combine/coadread",
+      "split_name": "5folds"
+    },
+    "stad": {
+      "study": "tcga_stad",
+      "data_root": "data/tcga_stad/clam_20x_resnet50_paper_k9",
+      "label_file": "datasets_csv/metadata/tcga_stad.csv",
+      "omics_dir": "datasets_csv/raw_rna_data/combine/stad",
+      "split_name": "5folds"
+    }
+  },
+  "defaults": {
+    "graph_type": "shgnn",
+    "gene_aggregation": "default",
+    "genomic_encoder": "original",
+    "rebalance_variant": "original",
+    "modality_dropout": 0.0,
+    "monotonicity_weight": 0.0,
+    "monotonicity_margin": 0.02,
+    "unimodal_loss_weight": 0.0,
+    "mismatch_loss_weight": 0.0
+  },
+  "experiments": [
+    {
+      "name": "shgnn_gene_mlp",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "shgnn",
+      "gene_aggregation": "default"
+    },
+    {
+      "name": "shgnn_gene_gcn",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "shgnn",
+      "gene_aggregation": "gcn"
+    },
+    {
+      "name": "shgnn_gene_kan",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "shgnn",
+      "gene_aggregation": "kan"
+    },
+    {
+      "name": "hgnn_gene_mlp",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "hgnn",
+      "gene_aggregation": "default"
+    },
+    {
+      "name": "hgnn_gene_gcn",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "hgnn",
+      "gene_aggregation": "gcn"
+    },
+    {
+      "name": "hgnn_gene_kan",
+      "group": "base_six",
+      "datasets": ["stad"],
+      "graph_type": "hgnn",
+      "gene_aggregation": "kan"
+    },
+    {
+      "name": "kan_quality_only",
+      "group": "kan_variants",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "kan",
+      "rebalance_variant": "quality",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2
+    },
+    {
+      "name": "kan_conflict_only",
+      "group": "kan_variants",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "kan",
+      "rebalance_variant": "conflict",
+      "modality_dropout": 0.2,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "kan_quality_conflict",
+      "group": "kan_variants",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "kan",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "kan_quality_conflict_no_dropout",
+      "group": "kan_variants",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "kan",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.0,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "kan_quality_conflict_no_monotonicity",
+      "group": "kan_variants",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "kan",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.0,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "pb_tamlu",
+      "group": "improved_kan",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "default",
+      "genomic_encoder": "pb_tamlu"
+    },
+    {
+      "name": "do_la",
+      "group": "improved_kan",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "default",
+      "genomic_encoder": "do_la"
+    },
+    {
+      "name": "jc_moa",
+      "group": "improved_kan",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "default",
+      "genomic_encoder": "jc_moa"
+    },
+    {
+      "name": "tc_rbf_kan",
+      "group": "improved_kan",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "default",
+      "genomic_encoder": "tc_rbf_kan"
+    },
+    {
+      "name": "dd_kac",
+      "group": "improved_kan",
+      "datasets": ["coadread", "stad"],
+      "gene_aggregation": "default",
+      "genomic_encoder": "dd_kac"
+    }
+  ]
+}
