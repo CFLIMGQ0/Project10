@@ -81,6 +81,21 @@
       "unimodal_loss_weight": 0.2
     },
     {
+      "name": "mlp_quality_conflict",
+      "group": "kan_variants",
+      "datasets": [
+        "coadread",
+        "stad"
+      ],
+      "gene_aggregation": "default",
+      "genomic_encoder": "original",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
       "name": "kan_conflict_only",
       "group": "kan_variants",
       "datasets": ["coadread", "stad"],
@@ -157,6 +172,36 @@
       "datasets": ["coadread", "stad"],
       "gene_aggregation": "default",
       "genomic_encoder": "dd_kac"
+    },
+    {
+      "name": "dd_kac_quality_conflict",
+      "group": "improved_kan_quality_conflict",
+      "datasets": [
+        "coadread",
+        "stad"
+      ],
+      "gene_aggregation": "default",
+      "genomic_encoder": "dd_kac",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
+    },
+    {
+      "name": "jc_moa_quality_conflict",
+      "group": "improved_kan_quality_conflict",
+      "datasets": [
+        "coadread",
+        "stad"
+      ],
+      "gene_aggregation": "default",
+      "genomic_encoder": "jc_moa",
+      "rebalance_variant": "quality_conflict",
+      "modality_dropout": 0.2,
+      "monotonicity_weight": 0.1,
+      "unimodal_loss_weight": 0.2,
+      "mismatch_loss_weight": 0.1
     }
   ]
 }

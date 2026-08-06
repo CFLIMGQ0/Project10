@@ -1,4 +1,5 @@
 from ast import Lambda
+import csv
 import json
 import numpy as np
 import pdb
@@ -33,6 +34,11 @@ from utils.general_utils import _get_split_loader, _print_network, _save_splits
 from utils.loss_func import NLLSurvLoss
 
 import torch.optim as optim
+from utils.fold_survival_bins import apply_training_fold_survival_bins
+from utils.pc_cmka_config import encoder_kwargs, load_pc_cmka_config
+from utils.pc_cmka_diagnostics import PCCMKADiagnosticRecorder
+from utils.pc_cmka_graph import build_fold_pathway_priors
+import time
 
 
 
@@ -94,16 +100,38 @@ def _init_optim(args, model):
     """
     print('\nInit optimizer ...', end=' ')
 
+    parameters = model.parameters()
+    optimizer_weight_decay = args.reg
+    if getattr(args, "mrepath_genomic_encoder", None) == "pc_cmka_ddkac":
+        decay_parameters = []
+        dictionary_parameters = []
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if name.endswith("dictionary.matrix"):
+                dictionary_parameters.append(parameter)
+            else:
+                decay_parameters.append(parameter)
+        parameters = [
+            {"params": decay_parameters, "weight_decay": args.reg},
+            {"params": dictionary_parameters, "weight_decay": 0.0},
+        ]
+        optimizer_weight_decay = 0.0
+
     if args.opt == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.reg)
+        optimizer = optim.Adam(
+            parameters,
+            lr=args.lr,
+            weight_decay=optimizer_weight_decay,
+        )
     elif args.opt == 'sgd':
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.reg)
+        optimizer = optim.SGD(parameters, lr=args.lr, momentum=0.9, weight_decay=optimizer_weight_decay)
     elif args.opt == "adamW":
-        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.reg)
+        optimizer = optim.AdamW(parameters, lr=args.lr, weight_decay=optimizer_weight_decay)
     elif args.opt == "radam":
-        optimizer = RAdam(model.parameters(), lr=args.lr, weight_decay=args.reg)
+        optimizer = RAdam(parameters, lr=args.lr, weight_decay=optimizer_weight_decay)
     elif args.opt == "lamb":
-        optimizer = Lambda(model.parameters(), lr=args.lr, weight_decay=args.reg)
+        optimizer = Lambda(parameters, lr=args.lr, weight_decay=optimizer_weight_decay)
     else:
         raise NotImplementedError
 
@@ -215,6 +243,8 @@ def _init_model(args):
             'gene_aggregation': args.mrepath_gene_aggregation,
             'genomic_encoder': args.mrepath_genomic_encoder,
             'gene_graphs': getattr(args, 'mrepath_gene_graphs', None),
+            'pc_cmka_priors': getattr(args, 'pc_cmka_priors', None),
+            'pc_cmka_kwargs': getattr(args, 'pc_cmka_encoder_kwargs', None),
             'rebalance_variant': args.mrepath_rebalance_variant,
             'modality_dropout': args.mrepath_modality_dropout,
             'monotonicity_weight': args.mrepath_monotonicity_weight,
@@ -515,6 +545,7 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     all_censorships = []
     all_event_times = []
     all_clinical_data = []
+    auxiliary_component_totals = {}
 
     # one epoch
     for batch_idx, data in enumerate(loader):
@@ -527,6 +558,13 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
         auxiliary_loss = getattr(model, "auxiliary_loss", None)
         if auxiliary_loss is not None:
             loss = loss + auxiliary_loss
+        for name, value in getattr(
+            model, "last_pc_cmka_auxiliary_losses", {}
+        ).items():
+            auxiliary_component_totals[name] = (
+                auxiliary_component_totals.get(name, 0.0)
+                + float(torch.as_tensor(value).detach().cpu())
+            )
         pathology_logits = getattr(model, "last_pathology_logits", None)
         genomic_logits = getattr(model, "last_genomic_logits", None)
         unimodal_weight = getattr(model, "unimodal_loss_weight", 0.0)
@@ -575,6 +613,29 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
 
     print('Epoch: {}, train_loss: {:.4f}, train_c_index: {:.4f}'.format(epoch, total_loss, c_index))
+    if auxiliary_component_totals:
+        denominator = max(len(loader), 1)
+        component_means = {
+            name: value / denominator
+            for name, value in auxiliary_component_totals.items()
+        }
+        print(
+            "PC-CMKA losses: "
+            + ", ".join(
+                f"{name}={value:.6f}"
+                for name, value in sorted(component_means.items())
+            )
+        )
+        history = getattr(model, "pc_cmka_epoch_loss_history", [])
+        history.append(
+            {
+                "epoch": int(epoch),
+                "train_loss": float(total_loss),
+                "train_c_index": float(c_index),
+                **component_means,
+            }
+        )
+        model.pc_cmka_epoch_loss_history = history
 
     return c_index, total_loss
 
@@ -718,6 +779,22 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
                     x_omic5=data_omics[4], 
                     x_omic6=data_omics[5]
                 )  
+                recorder = (
+                    getattr(model, "pc_cmka_recorder", None)
+                    if getattr(model, "pc_cmka_record_diagnostics", False)
+                    else None
+                )
+                if recorder is not None and getattr(
+                    model, "last_genomic_encoder_diagnostics", {}
+                ):
+                    case_id = loader.dataset.metadata.iloc[count]["case_id"]
+                    recorder.add(
+                        case_id,
+                        "val",
+                        model.last_genomic_encoder_diagnostics,
+                        getattr(model, "last_pc_cmka_edge_diagnostics", []),
+                        epoch=getattr(model, "pc_cmka_diagnostic_epoch", -1),
+                    )
             elif modality == "survpath":
 
                 input_args = {"x_path": data_WSI.to(device)}
@@ -878,12 +955,16 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
         args.results_dir, "s_{}_best_checkpoint.pt".format(cur)
     )
     best_p=1
+    best_epoch = -1
+    model.pc_cmka_record_diagnostics = False
     for epoch in range(args.max_epochs):
+        model.pc_cmka_diagnostic_epoch = epoch
         _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
         _, val_cindex, _, risk, event, censor, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
         print('Val loss:', total_loss, ', val_c_index:', val_cindex)
         if val_cindex>best_val_index:
             best_val_index=val_cindex
+            best_epoch = epoch
             torch.save(model.state_dict(), best_checkpoint_path)
         '''risk = np.abs(risk)
         threshold = np.median(risk)
@@ -944,7 +1025,9 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
     checkpoint_selection = getattr(args, "checkpoint_selection", "best")
     if checkpoint_selection == "best":
         model.load_state_dict(torch.load(best_checkpoint_path, weights_only=True))
+    model.pc_cmka_record_diagnostics = True
     results_dict, val_cindex, val_cindex_ipcw, _, _, _,val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
+    model.pc_cmka_record_diagnostics = False
     diagnostics = getattr(model, 'last_genomic_encoder_diagnostics', {})
     if diagnostics:
         serialized = {}
@@ -962,6 +1045,7 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
             'w',
         ) as handle:
             json.dump(serialized, handle, indent=2)
+    model.pc_cmka_best_epoch = best_epoch
     
     print(
         'Selected ({}) Val c-index: {:.4f}; best observed during training: {:.4f}'.format(
@@ -999,6 +1083,47 @@ def _train_val(datasets, cur, args):
     #----> gets splits and summarize
     train_split, val_split = _get_splits(datasets, cur, args)
 
+    if (
+        getattr(args, 'fold_survival_bins', False)
+        or args.mrepath_genomic_encoder == 'pc_cmka_ddkac'
+    ):
+        if (
+            args.mrepath_genomic_encoder == 'pc_cmka_ddkac'
+            and not getattr(args, 'fold_survival_bins', False)
+        ):
+            print(
+                'PC-CMKA-DDKAC: forcing training-fold-only survival bins '
+                'to prevent validation outcome leakage.'
+            )
+        args.fold_survival_bins = True
+        binner = apply_training_fold_survival_bins(
+            train_split,
+            val_split,
+            label_col=args.label_col,
+            censorship_col=args.dataset_factory.censorship_var,
+            n_bins=args.n_classes,
+        )
+        args.pc_cmka_fold_boundaries = binner.boundaries.tolist()
+
+    if args.mrepath_genomic_encoder == 'pc_cmka_ddkac':
+        pc_config = load_pc_cmka_config(
+            args.pc_cmka_config, args.pc_cmka_ablation
+        )
+        args.pc_cmka_config_resolved = pc_config
+        args.pc_cmka_encoder_kwargs = encoder_kwargs(pc_config)
+        args.pc_cmka_diagnostics_enabled = bool(
+            pc_config['diagnostics']['enabled']
+        )
+        prior_config = pc_config['prior']
+        args.pc_cmka_priors = build_fold_pathway_priors(
+            train_split,
+            neighbours=prior_config['neighbours'],
+            minimum_weight=prior_config['minimum_weight'],
+        )
+    else:
+        args.pc_cmka_priors = None
+        args.pc_cmka_encoder_kwargs = None
+
     if args.mrepath_genomic_encoder == 'dd_kac':
         args.mrepath_gene_graphs = _build_fold_gene_graphs(train_split)
     else:
@@ -1009,6 +1134,20 @@ def _train_val(datasets, cur, args):
 
     #----> init model
     model = _init_model(args)
+    recorder = None
+    fold_started = time.perf_counter()
+    if (
+        args.mrepath_genomic_encoder == 'pc_cmka_ddkac'
+        and args.pc_cmka_diagnostics_enabled
+    ):
+        diagnostic_dir = args.pc_cmka_diagnostics_dir or os.path.join(
+            args.results_dir, 'pc_cmka_diagnostics'
+        )
+        recorder = PCCMKADiagnosticRecorder(diagnostic_dir, cur)
+        model.pc_cmka_recorder = recorder
+        model.pc_cmka_epoch_loss_history = []
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
     
     #---> init optimizer
     optimizer = _init_optim(args, model)
@@ -1021,6 +1160,57 @@ def _train_val(datasets, cur, args):
 
     #---> do train val
     results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss) = _step(cur, args, loss_fn, model, optimizer, lr_scheduler, train_loader, val_loader)
+
+    if recorder is not None:
+        loss_history = model.pc_cmka_epoch_loss_history
+        if loss_history:
+            fieldnames = sorted(
+                {key for record in loss_history for key in record}
+            )
+            with open(
+                os.path.join(
+                    args.results_dir, f's_{cur}_pc_cmka_epoch_losses.csv'
+                ),
+                'w',
+                newline='',
+            ) as handle:
+                writer = csv.DictWriter(handle, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(loss_history)
+        recorder.flush()
+        recorder.save_fold_summary(
+            c_index=val_cindex,
+            best_epoch=getattr(model, 'pc_cmka_best_epoch', -1),
+            elapsed_seconds=time.perf_counter() - fold_started,
+            peak_gpu_bytes=(
+                torch.cuda.max_memory_allocated()
+                if torch.cuda.is_available() else 0
+            ),
+        )
+
+    if args.mrepath_genomic_encoder == 'pc_cmka_ddkac':
+        with open(
+            os.path.join(args.results_dir, f's_{cur}_pc_cmka_config.json'),
+            'w',
+        ) as handle:
+            json.dump(
+                {
+                    'config': args.pc_cmka_config_resolved,
+                    'survival_boundaries': args.pc_cmka_fold_boundaries,
+                    'prior_sources': [item.source for item in args.pc_cmka_priors],
+                    'prior_graphs': [
+                        {
+                            'source': item.source,
+                            'gene_names': list(item.gene_names),
+                            'edges': item.edge_index.t().tolist(),
+                            'prior_weights': item.prior_weights.tolist(),
+                        }
+                        for item in args.pc_cmka_priors
+                    ],
+                },
+                handle,
+                indent=2,
+            )
 
     return results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss)
 

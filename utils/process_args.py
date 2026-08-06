@@ -124,10 +124,34 @@ def _process_args():
         '--mrepath_genomic_encoder',
         choices=[
             'original', 'pb_tamlu', 'do_la', 'jc_moa',
-            'tc_rbf_kan', 'dd_kac',
+            'tc_rbf_kan', 'dd_kac', 'pc_cmka_ddkac',
         ],
         default='original',
         help='Pathway-wise genomic encoder; improved variants preserve six tokens.',
+    )
+    parser.add_argument(
+        '--pc_cmka_config',
+        type=str,
+        default='configs/pc_cmka_ddkac.json',
+        help='PC-CMKA-DDKAC JSON configuration path.',
+    )
+    parser.add_argument(
+        '--pc_cmka_ablation',
+        type=str,
+        default='full_pc_cmka_ddkac',
+        help='Descriptive ablation name from the PC-CMKA configuration.',
+    )
+    parser.add_argument(
+        '--pc_cmka_diagnostics_dir',
+        type=str,
+        default=None,
+        help='Optional structured per-patient PC-CMKA diagnostics directory.',
+    )
+    parser.add_argument(
+        '--fold_survival_bins',
+        action='store_true',
+        default=False,
+        help='Fit discrete survival boundaries on each training fold only.',
     )
     parser.add_argument(
         '--mrepath_rebalance_variant',

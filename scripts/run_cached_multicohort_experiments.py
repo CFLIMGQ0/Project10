@@ -29,7 +29,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", choices=["coadread", "stad"], required=True)
     parser.add_argument(
         "--group",
-        choices=["base_six", "kan_variants", "improved_kan", "all"],
+        choices=[
+            "base_six",
+            "kan_variants",
+            "improved_kan",
+            "improved_kan_quality_conflict",
+            "all",
+        ],
         default="all",
     )
     parser.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX)

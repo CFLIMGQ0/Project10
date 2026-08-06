@@ -551,6 +551,8 @@ def build_genomic_encoder(
     output_dim: int = 256,
     dropout: float = 0.25,
     gene_graphs: Sequence[torch.Tensor] | None = None,
+    pc_cmka_priors=None,
+    pc_cmka_kwargs: dict | None = None,
 ) -> GenomicEncoderBase:
     if name == "pb_tamlu":
         return PBTAMLUEncoder(input_dims, hidden_dim, output_dim, dropout)
@@ -562,4 +564,17 @@ def build_genomic_encoder(
         return TCRBFKANEncoder(input_dims, hidden_dim, output_dim, dropout)
     if name == "dd_kac":
         return DDKACEncoder(input_dims, gene_graphs, output_dim)
+    if name == "pc_cmka_ddkac":
+        if pc_cmka_priors is None:
+            raise ValueError(
+                "PC-CMKA-DDKAC requires six training-fold graph priors"
+            )
+        from models.layers.pc_cmka_encoder import PCCMKADDKACEncoder
+
+        return PCCMKADDKACEncoder(
+            input_dims,
+            pc_cmka_priors,
+            output_dim=output_dim,
+            **(pc_cmka_kwargs or {}),
+        )
     raise ValueError(f"Unknown genomic encoder: {name}")
