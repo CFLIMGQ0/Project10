@@ -133,7 +133,8 @@ class MRePath(nn.Module):
                  rebalance_variant="original", modality_dropout=0.0,
                  monotonicity_weight=0.0, monotonicity_margin=0.02,
                  unimodal_loss_weight=0.0, mismatch_loss_weight=0.0,
-                 genomic_encoder="original", gene_graphs=None):
+                 genomic_encoder="original", gene_graphs=None,
+                 pc_cmka_priors=None, pc_cmka_kwargs=None):
         super(MRePath, self).__init__()
 
         self.omic_sizes = omic_sizes
@@ -238,6 +239,8 @@ class MRePath(nn.Module):
                 output_dim=hidden[-1],
                 dropout=0.25,
                 gene_graphs=gene_graphs,
+                pc_cmka_priors=pc_cmka_priors,
+                pc_cmka_kwargs=pc_cmka_kwargs,
             )
         self.gene_aggregator = GeneGraphAggregator(
             embedding_dim=hidden[-1], method=gene_aggregation
@@ -289,6 +292,8 @@ class MRePath(nn.Module):
         self.classifier = nn.Linear(hidden[-1]//2, self.n_classes)
 
         self.apply(initialize_weights)
+        if genomic_encoder == "pc_cmka_ddkac":
+            self.genomic_encoder.reset_conservative_initialization()
 
     def forward(self, **kwargs):
         x_path = kwargs["x_path"]
@@ -309,6 +314,12 @@ class MRePath(nn.Module):
             genomics_features = self.genomic_encoder(x_omic)
             genomic_encoder_auxiliary = self.genomic_encoder.auxiliary_loss
             self.last_genomic_encoder_diagnostics = self.genomic_encoder.diagnostics
+            self.last_pc_cmka_edge_diagnostics = getattr(
+                self.genomic_encoder, "last_edge_diagnostics", []
+            )
+            self.last_pc_cmka_auxiliary_losses = getattr(
+                self.genomic_encoder, "auxiliary_losses", {}
+            )
         genomics_features = self.gene_aggregator(genomics_features)
         pathomics_features = self.pathomics_fc(x_path)
         if pathomics_features.ndim == 3:

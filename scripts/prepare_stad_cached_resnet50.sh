@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_BIN="${MREPATH_PYTHON:-/home/administrator/miniconda3/envs/mrepath-train/bin/python}"
 PREPROCESS_PYTHON_BIN="${MREPATH_PREPROCESS_PYTHON:-/home/administrator/miniconda3/envs/mrepath-preprocess/bin/python}"
+GRAPH_PYTHON_BIN="${MREPATH_GRAPH_PYTHON:-${PREPROCESS_PYTHON_BIN}}"
 SOURCE_ROOT="${PROJECT_ROOT}/data/tcga_stad/raw_svs"
 OUTPUT_ROOT="${PROJECT_ROOT}/data/tcga_stad/clam_20x_resnet50_paper_k9"
 MANIFEST="${PROJECT_ROOT}/data/tcga_stad/gdc_manifest_tcga_stad_mrepath.tsv"
@@ -63,7 +64,7 @@ if [[ "${preprocess_failed}" -ne 0 ]]; then
   exit 1
 fi
 
-"${PYTHON_BIN}" -u scripts/build_wsi_graphs.py \
+"${GRAPH_PYTHON_BIN}" -u scripts/build_wsi_graphs.py \
   --h5-dir "${OUTPUT_ROOT}/h5_files" \
   --output-dir "${OUTPUT_ROOT}/graph_files" \
   --metadata-csv "${PROJECT_ROOT}/datasets_csv/metadata/tcga_stad.csv" \

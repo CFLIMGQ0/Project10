@@ -89,6 +89,10 @@ def _prepare_for_experiment(args):
         'mrepath_unimodal_loss_weight': args.mrepath_unimodal_loss_weight,
         'mrepath_mismatch_loss_weight': args.mrepath_mismatch_loss_weight,
         'mrepath_encoder': args.mrepath_encoder,
+        'pc_cmka_config': args.pc_cmka_config,
+        'pc_cmka_ablation': args.pc_cmka_ablation,
+        'pc_cmka_diagnostics_dir': args.pc_cmka_diagnostics_dir,
+        'fold_survival_bins': args.fold_survival_bins,
         'torch_version': torch.__version__,
         'cuda_version': torch.version.cuda,
     }

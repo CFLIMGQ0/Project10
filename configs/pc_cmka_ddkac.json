@@ -1,0 +1,187 @@
+{
+  "method": "pc_cmka_ddkac",
+  "prior": {
+    "source": "training_correlation",
+    "warning": "Fallback only; the repository contains no external PPI/Reactome edge file.",
+    "neighbours": 8,
+    "minimum_weight": 0.0001,
+    "lambda_scope": "global_theoretical"
+  },
+  "spectral": {
+    "moment_order": 2,
+    "probe_epsilon": 1e-8,
+    "rho_max": 0.5
+  },
+  "dictionary": {
+    "rank": 8,
+    "trainable": true,
+    "weighted_orthogonal": true
+  },
+  "target": {
+    "hidden_dim": 64,
+    "max_offset": 0.5,
+    "min_precision": 0.0001
+  },
+  "solver": {
+    "mode": "joint",
+    "iterations": 5,
+    "step_size": 0.1,
+    "beta": 0.01,
+    "lambda_rho": 0.001,
+    "gradient_clip": 10.0
+  },
+  "augmentation": {
+    "mode": "hessian_antithetic",
+    "hessian_mode": "diagonal",
+    "hessian_low_rank": 2,
+    "damping": 1e-5,
+    "xi_max": 0.2,
+    "krylov_enabled": true,
+    "krylov_eta": 0.1,
+    "shared_route": true,
+    "train_only": true
+  },
+  "ssl": {
+    "mode": "cosine_vicreg",
+    "structure_weight": 1.0,
+    "fusion_weight": 1.0,
+    "gate_weight": 1.0,
+    "variance_weight": 0.0,
+    "covariance_weight": 0.0
+  },
+  "identifiability": {
+    "mode": "randomized",
+    "random_probes": 1,
+    "epsilon": 1e-8
+  },
+  "loss": {
+    "lambda_moment": 1.0,
+    "lambda_trust": 0.001,
+    "lambda_ssl": 0.1,
+    "lambda_id": 0.001,
+    "lambda_dict": 0.001,
+    "lambda_ddkac_consistency": 0.0001
+  },
+  "diagnostics": {
+    "enabled": true,
+    "formats": ["jsonl", "csv", "npz"],
+    "top_edges": 10,
+    "edge_histogram_bins": 20
+  },
+  "ablations": [
+    {
+      "name": "original_ddkac_fixed_graph",
+      "source_label": "A0",
+      "encoder": "dd_kac"
+    },
+    {
+      "name": "reference_operator_fixed_graph",
+      "source_label": "A1",
+      "calibration": "fixed_graph",
+      "augmentation": "off",
+      "shared_route": true,
+      "ssl": false,
+      "identifiability": "off"
+    },
+    {
+      "name": "direct_patient_edge_gate",
+      "source_label": "A2",
+      "calibration": "direct_edge_gate",
+      "augmentation": "off",
+      "ssl": false,
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_inverse_calibration",
+      "source_label": "A3",
+      "calibration": "joint",
+      "augmentation": "off",
+      "ssl": false,
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_random_drop",
+      "source_label": "A4",
+      "calibration": "joint",
+      "augmentation": "random_drop",
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_independent_random_views",
+      "source_label": "A5",
+      "calibration": "joint",
+      "augmentation": "independent_random",
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_hessian_antithetic",
+      "source_label": "A6",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": false,
+      "shared_route": false,
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_hessian_krylov",
+      "source_label": "A7",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": true,
+      "shared_route": false,
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_hessian_krylov_shared_route",
+      "source_label": "A8",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": true,
+      "shared_route": true,
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_shared_route_structure_ssl",
+      "source_label": "A9",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": true,
+      "shared_route": true,
+      "ssl": "structure",
+      "identifiability": "off"
+    },
+    {
+      "name": "moment_shared_route_ssl_identifiability",
+      "source_label": "A10",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": true,
+      "shared_route": true,
+      "ssl": "structure",
+      "identifiability": "randomized"
+    },
+    {
+      "name": "full_pc_cmka_ddkac",
+      "source_label": "Full",
+      "calibration": "joint",
+      "augmentation": "hessian_antithetic",
+      "krylov_enabled": true,
+      "shared_route": true,
+      "ssl": "structure_fusion_gate",
+      "identifiability": "randomized"
+    },
+    {
+      "name": "effective_resistance_control",
+      "source_label": "extra_control",
+      "calibration": "joint",
+      "augmentation": "effective_resistance",
+      "ssl": true,
+      "identifiability": "off"
+    }
+  ]
+}
