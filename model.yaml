@@ -1,0 +1,24 @@
+# MRePath 模型结构选择
+# 本文件只描述使用哪些模型模块；学习率、维度和损失权重等参数后续再细化。
+
+pathology:
+  enabled: true                         # 可选: true, false
+  patch_encoder: resnet50               # 可选: resnet50, convnextv2_base
+  graph_encoder: shgnn                  # 可选: none, mlp, gcn, gat, hgnn, shgnn
+  hyperedges: both                      # 可选: none, topology, feature, both
+
+genomics:
+  enabled: true                         # 可选: true, false
+  functional_groups: 6                 # 可选: 6（当前固定为六个功能组）
+  graph_structure: pc_cmka_full_graph   # 可选: none, fixed_fold_graph, reference_operator, patient_degree_edge_gate, reference_degree_edge_gate, direct_edge_gate, direct_low_rank, inverse_calibration, inverse_fixed_rho, inverse_random_probe, bernoulli_views, effective_resistance_views, independent_views, isotropic_antithetic, hessian_antithetic, pc_cmka_full_graph
+  encoder: dd_kac                       # 可选: mlp, gcn, gat, kan, dd_kac, pb_tamlu, do_la, jc_moa, tc_rbf_kan
+  pathway_aggregation: none             # 可选: none, gcn, gat, kan
+
+fusion:
+  enabled: true                         # 可选: true, false（仅在病理和基因组均开启时生效）
+  weighting: dynamic                    # 可选: dynamic, fixed
+  method: ifa                           # 可选: ifa, pg_gp, sa_pg, sa_gp, concat
+  rebalance: original                   # 可选: original, quality, conflict, quality_conflict
+
+prediction:
+  head: discrete_survival               # 可选: discrete_survival

@@ -1,5 +1,7 @@
 {
-  "description": "Cached COREAD/STAD base combinations and KAN reliability variants",
+  "description": "Legacy genomic encoder combination experiments (currently paused)",
+  "experiment_family": "genomic_encoder_combinations",
+  "scheduling": "paused",
   "datasets": {
     "coadread": {
       "study": "tcga_coadread",

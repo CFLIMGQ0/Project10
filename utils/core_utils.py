@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pdb
 import os
+from time import perf_counter
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -31,6 +32,11 @@ from torch.nn.utils.rnn import pad_sequence
 
 from utils.general_utils import _get_split_loader, _print_network, _save_splits
 from utils.loss_func import NLLSurvLoss
+from utils.pc_cmka import (
+    build_fold_pc_cmka_priors,
+    load_pc_cmka_config,
+    to_jsonable,
+)
 
 import torch.optim as optim
 
@@ -215,6 +221,7 @@ def _init_model(args):
             'gene_aggregation': args.mrepath_gene_aggregation,
             'genomic_encoder': args.mrepath_genomic_encoder,
             'gene_graphs': getattr(args, 'mrepath_gene_graphs', None),
+            'pc_cmka_config': getattr(args, 'pc_cmka_resolved_config', None),
             'rebalance_variant': args.mrepath_rebalance_variant,
             'modality_dropout': args.mrepath_modality_dropout,
             'monotonicity_weight': args.mrepath_monotonicity_weight,
@@ -515,6 +522,8 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     all_censorships = []
     all_event_times = []
     all_clinical_data = []
+    pc_component_totals = {}
+    pc_component_batches = 0
 
     # one epoch
     for batch_idx, data in enumerate(loader):
@@ -527,6 +536,13 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
         auxiliary_loss = getattr(model, "auxiliary_loss", None)
         if auxiliary_loss is not None:
             loss = loss + auxiliary_loss
+        pc_components = getattr(model, "last_genomic_encoder_losses", {})
+        if pc_components:
+            pc_component_batches += 1
+            for name, value in pc_components.items():
+                pc_component_totals[name] = pc_component_totals.get(name, 0.0) + float(
+                    torch.as_tensor(value).detach().cpu()
+                )
         pathology_logits = getattr(model, "last_pathology_logits", None)
         genomic_logits = getattr(model, "last_genomic_logits", None)
         unimodal_weight = getattr(model, "unimodal_loss_weight", 0.0)
@@ -575,6 +591,18 @@ def _train_loop_survival(epoch, model, modality, loader, optimizer, scheduler, l
     c_index = concordance_index_censored((1-all_censorships).astype(bool), all_event_times, all_risk_scores, tied_tol=1e-08)[0]
 
     print('Epoch: {}, train_loss: {:.4f}, train_c_index: {:.4f}'.format(epoch, total_loss, c_index))
+    model.last_pc_cmka_epoch_losses = {
+        name: value / max(pc_component_batches, 1)
+        for name, value in pc_component_totals.items()
+    }
+    if model.last_pc_cmka_epoch_losses:
+        print(
+            "PC-CMKA losses: "
+            + ", ".join(
+                f"{name}={value:.6f}"
+                for name, value in sorted(model.last_pc_cmka_epoch_losses.items())
+            )
+        )
 
     return c_index, total_loss
 
@@ -689,6 +717,7 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
     all_rebalance_confidence = []
     all_pathology_risk = []
     all_genomic_risk = []
+    all_pc_cmka_diagnostics = []
 
     slide_ids = loader.dataset.metadata['slide_id']
     count = 0
@@ -780,6 +809,9 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
             else:
                 genomic_risk, _ = _calculate_risk(genomic_logits)
                 all_genomic_risk.append(float(genomic_risk[0]))
+            all_pc_cmka_diagnostics.append(
+                to_jsonable(getattr(model, "last_genomic_encoder_diagnostics", {}))
+            )
             total_loss += loss_value
             all_slide_ids.append(slide_ids.values[count])
             count += 1
@@ -814,6 +846,8 @@ def _summary(dataset_factory, model, modality, loader, loss_fn, survival_train=N
         )
         patient_results[case_id]["pathology_risk"] = all_pathology_risk[i]
         patient_results[case_id]["genomic_risk"] = all_genomic_risk[i]
+        if all_pc_cmka_diagnostics[i]:
+            patient_results[case_id]["pc_cmka"] = all_pc_cmka_diagnostics[i]
     
     c_index, c_index2, BS, IBS, iauc = _calculate_metrics(loader, dataset_factory, survival_train, all_risk_scores, all_censorships, all_event_times, all_risk_by_bin_scores)
 
@@ -874,16 +908,23 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
 
     all_survival = _extract_survival_metadata(train_loader, val_loader)
     best_val_index = float('-inf')
+    best_epoch = -1
     best_checkpoint_path = os.path.join(
         args.results_dir, "s_{}_best_checkpoint.pt".format(cur)
     )
     best_p=1
+    pc_epoch_rows = []
     for epoch in range(args.max_epochs):
         _train_loop_survival(epoch, model, args.modality, train_loader, optimizer, scheduler, loss_fn)
+        if getattr(model, "last_pc_cmka_epoch_losses", {}):
+            pc_epoch_rows.append(
+                {"epoch": epoch, **model.last_pc_cmka_epoch_losses}
+            )
         _, val_cindex, _, risk, event, censor, _, _, _, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
         print('Val loss:', total_loss, ', val_c_index:', val_cindex)
         if val_cindex>best_val_index:
             best_val_index=val_cindex
+            best_epoch=epoch
             torch.save(model.state_dict(), best_checkpoint_path)
         '''risk = np.abs(risk)
         threshold = np.median(risk)
@@ -947,27 +988,36 @@ def _step(cur, args, loss_fn, model, optimizer, scheduler, train_loader, val_loa
     results_dict, val_cindex, val_cindex_ipcw, _, _, _,val_BS, val_IBS, val_iauc, total_loss = _summary(args.dataset_factory, model, args.modality, val_loader, loss_fn, all_survival)
     diagnostics = getattr(model, 'last_genomic_encoder_diagnostics', {})
     if diagnostics:
-        serialized = {}
-        for name, value in diagnostics.items():
-            tensor = torch.as_tensor(value).detach().float().cpu()
-            serialized[name] = {
-                'shape': list(tensor.shape),
-                'mean': float(tensor.mean()),
-                'std': float(tensor.std(unbiased=False)),
-                'min': float(tensor.min()),
-                'max': float(tensor.max()),
-            }
         with open(
             os.path.join(args.results_dir, f's_{cur}_genomic_encoder_diagnostics.json'),
             'w',
         ) as handle:
-            json.dump(serialized, handle, indent=2)
+            json.dump(to_jsonable(diagnostics), handle, indent=2)
+    if pc_epoch_rows:
+        import pandas as pd
+
+        pd.DataFrame(pc_epoch_rows).to_csv(
+            os.path.join(args.results_dir, f's_{cur}_pc_cmka_epoch_losses.csv'),
+            index=False,
+        )
+        patient_diagnostics = {
+            case_id: values.get("pc_cmka", {})
+            for case_id, values in results_dict.items()
+            if values.get("pc_cmka")
+        }
+        with open(
+            os.path.join(args.results_dir, f's_{cur}_pc_cmka_patient_diagnostics.json'),
+            'w',
+        ) as handle:
+            json.dump(patient_diagnostics, handle, indent=2)
     
     print(
         'Selected ({}) Val c-index: {:.4f}; best observed during training: {:.4f}'.format(
             checkpoint_selection, val_cindex, best_val_index
         )
     )
+    model.pc_cmka_best_epoch = best_epoch
+    model.pc_cmka_best_val_cindex = best_val_index
     # print('Final Val c-index: {:.4f} | Final Val c-index2: {:.4f} | Final Val IBS: {:.4f} | Final Val iauc: {:.4f}'.format(
     #     val_cindex, 
     #     val_cindex_ipcw,
@@ -999,10 +1049,36 @@ def _train_val(datasets, cur, args):
     #----> gets splits and summarize
     train_split, val_split = _get_splits(datasets, cur, args)
 
-    if args.mrepath_genomic_encoder == 'dd_kac':
+    fold_start = perf_counter()
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+    if args.mrepath_genomic_encoder == 'pc_cmka_ddkac':
+        args.pc_cmka_resolved_config = load_pc_cmka_config(
+            args.pc_cmka_config, args.pc_cmka_experiment
+        )
+        args.mrepath_gene_graphs, provenance = build_fold_pc_cmka_priors(
+            train_split, args.pc_cmka_resolved_config
+        )
+        with open(
+            os.path.join(args.results_dir, f's_{cur}_pc_cmka_config.json'),
+            'w',
+        ) as handle:
+            json.dump(
+                {
+                    "config": args.pc_cmka_resolved_config,
+                    "prior_provenance": provenance,
+                },
+                handle,
+                indent=2,
+            )
+        if provenance.get("warning"):
+            print("PC-CMKA PRIOR WARNING:", provenance["warning"])
+    elif args.mrepath_genomic_encoder == 'dd_kac':
         args.mrepath_gene_graphs = _build_fold_gene_graphs(train_split)
+        args.pc_cmka_resolved_config = None
     else:
         args.mrepath_gene_graphs = None
+        args.pc_cmka_resolved_config = None
     
     #----> init loss function
     loss_fn = _init_loss_function(args)
@@ -1021,6 +1097,24 @@ def _train_val(datasets, cur, args):
 
     #---> do train val
     results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss) = _step(cur, args, loss_fn, model, optimizer, lr_scheduler, train_loader, val_loader)
+    resource_record = {
+        "fold": cur,
+        "runtime_seconds": perf_counter() - fold_start,
+        "peak_gpu_bytes": (
+            int(torch.cuda.max_memory_allocated()) if torch.cuda.is_available() else 0
+        ),
+        "val_cindex": float(val_cindex),
+        "best_epoch": int(getattr(model, "pc_cmka_best_epoch", -1)),
+        "best_val_cindex": float(
+            getattr(model, "pc_cmka_best_val_cindex", val_cindex)
+        ),
+    }
+    if args.mrepath_genomic_encoder == 'pc_cmka_ddkac':
+        with open(
+            os.path.join(args.results_dir, f's_{cur}_pc_cmka_resources.json'),
+            'w',
+        ) as handle:
+            json.dump(to_jsonable(resource_record), handle, indent=2)
 
     return results_dict, (val_cindex, val_cindex2, val_BS, val_IBS, val_iauc, total_loss)
 

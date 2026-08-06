@@ -82,6 +82,9 @@ def _prepare_for_experiment(args):
         'mrepath_fusion': args.mrepath_fusion,
         'mrepath_gene_aggregation': args.mrepath_gene_aggregation,
         'mrepath_genomic_encoder': args.mrepath_genomic_encoder,
+        'pc_cmka_config': args.pc_cmka_config,
+        'pc_cmka_experiment': args.pc_cmka_experiment,
+        'fold_survival_bins': args.fold_survival_bins,
         'mrepath_rebalance_variant': args.mrepath_rebalance_variant,
         'mrepath_modality_dropout': args.mrepath_modality_dropout,
         'mrepath_monotonicity_weight': args.mrepath_monotonicity_weight,
@@ -194,6 +197,8 @@ def _get_custom_exp_code(args):
         )
         if args.mrepath_rebalance_variant != "original":
             param_code += f"_rb-{args.mrepath_rebalance_variant}"
+        if args.mrepath_genomic_encoder == "pc_cmka_ddkac":
+            param_code += f"_pc-{args.pc_cmka_experiment}"
 
     #----> Updating
     args.param_code = param_code
