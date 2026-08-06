@@ -133,7 +133,8 @@ class MRePath(nn.Module):
                  rebalance_variant="original", modality_dropout=0.0,
                  monotonicity_weight=0.0, monotonicity_margin=0.02,
                  unimodal_loss_weight=0.0, mismatch_loss_weight=0.0,
-                 genomic_encoder="original", gene_graphs=None):
+                 genomic_encoder="original", gene_graphs=None,
+                 pc_cmka_config=None):
         super(MRePath, self).__init__()
 
         self.omic_sizes = omic_sizes
@@ -238,6 +239,7 @@ class MRePath(nn.Module):
                 output_dim=hidden[-1],
                 dropout=0.25,
                 gene_graphs=gene_graphs,
+                pc_cmka_config=pc_cmka_config,
             )
         self.gene_aggregator = GeneGraphAggregator(
             embedding_dim=hidden[-1], method=gene_aggregation
@@ -305,10 +307,14 @@ class MRePath(nn.Module):
                 genomics_features = torch.stack(encoded_pathways, dim=1)
             genomic_encoder_auxiliary = genomics_features.new_zeros(())
             self.last_genomic_encoder_diagnostics = {}
+            self.last_genomic_encoder_losses = {}
         else:
             genomics_features = self.genomic_encoder(x_omic)
             genomic_encoder_auxiliary = self.genomic_encoder.auxiliary_loss
             self.last_genomic_encoder_diagnostics = self.genomic_encoder.diagnostics
+            self.last_genomic_encoder_losses = getattr(
+                self.genomic_encoder, "loss_components", {}
+            )
         genomics_features = self.gene_aggregator(genomics_features)
         pathomics_features = self.pathomics_fc(x_path)
         if pathomics_features.ndim == 3:

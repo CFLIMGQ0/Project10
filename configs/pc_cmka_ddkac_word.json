@@ -1,0 +1,244 @@
+{
+  "method": "PC-CMKA-DDKAC",
+  "design_source": "PC-CMKA-DDKAC_最终创新方案.docx",
+  "prior": {
+    "source": "train_fold_correlation_fallback",
+    "edge_list": null,
+    "neighbours": 8,
+    "minimum_weight": 0.001
+  },
+  "spectral": {
+    "moment_order": 2,
+    "spectral_bound": null,
+    "normalization": "reference",
+    "epsilon": 1e-06
+  },
+  "dictionary": {
+    "rank": 4
+  },
+  "target": {
+    "hidden_dim": 32,
+    "max_offset": 0.25,
+    "min_precision": 0.1
+  },
+  "solver": {
+    "mode": "differentiable",
+    "iterations": 3,
+    "step_size": 0.05,
+    "beta": 0.1,
+    "lambda_rho": 0.01,
+    "rho_max": 0.5,
+    "fixed_rho": 0.25,
+    "gradient_clip": 5.0
+  },
+  "calibration_mode": "inverse",
+  "trust_mode": "minimum",
+  "probe_mode": "functional",
+  "augmentation": {
+    "mode": "hessian_antithetic",
+    "hessian_mode": "diagonal",
+    "hessian_low_rank": 2,
+    "damping": 0.01,
+    "xi_max": 0.2,
+    "krylov_enabled": true,
+    "krylov_eta": 0.1,
+    "shared_route": true,
+    "train_only": true,
+    "bernoulli_keep": 0.8,
+    "minimum_probability": 0.25
+  },
+  "ssl": {
+    "mode": "structure_fusion_gate"
+  },
+  "identifiability": {
+    "mode": "randomized",
+    "random_probes": 1,
+    "tau": 0.001
+  },
+  "loss": {
+    "lambda_moment": 0.01,
+    "lambda_trust": 0.001,
+    "lambda_ssl": 0.01,
+    "lambda_id": 0.001,
+    "lambda_dictionary": 0.0001,
+    "lambda_structure": 1.0,
+    "lambda_fusion": 0.5,
+    "lambda_gate": 0.1
+  },
+  "experiments": [
+    {
+      "name": "A0_full",
+      "source_label": "A0",
+      "question": "完整模型的最终性能与稳定性",
+      "overrides": {}
+    },
+    {
+      "name": "A1_direct_coefficients",
+      "source_label": "A1",
+      "question": "逆问题是否优于MLP直接输出a_p",
+      "overrides": {"calibration_mode": "direct_coefficients"}
+    },
+    {
+      "name": "A2_fixed_rho",
+      "source_label": "A2",
+      "question": "患者自适应最小偏移是否必要",
+      "overrides": {"trust_mode": "fixed", "loss": {"lambda_trust": 0.0}}
+    },
+    {
+      "name": "A3_random_probe",
+      "source_label": "A3",
+      "question": "患者功能探针是否优于全局随机探针",
+      "overrides": {"probe_mode": "random"}
+    },
+    {
+      "name": "A4_isotropic_uncertainty",
+      "source_label": "A4",
+      "question": "Hessian校准不确定性是否优于各向同性噪声",
+      "overrides": {"augmentation": {"mode": "isotropic_antithetic"}}
+    },
+    {
+      "name": "A5_independent_views",
+      "source_label": "A5",
+      "question": "中心反向配对是否优于独立随机视图",
+      "overrides": {"augmentation": {"mode": "independent_random"}}
+    },
+    {
+      "name": "A6_no_krylov",
+      "source_label": "A6",
+      "question": "Krylov任务相关安全约束是否必要",
+      "overrides": {"augmentation": {"krylov_enabled": false}}
+    },
+    {
+      "name": "A7_separate_routes",
+      "source_label": "A7",
+      "question": "共享频率路由是否能隔离图增强差异",
+      "overrides": {"augmentation": {"shared_route": false}}
+    },
+    {
+      "name": "A8_no_identifiability",
+      "source_label": "A8",
+      "question": "切空间可辨识性是否降低图与频率补偿",
+      "overrides": {"identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "A9_structure_only",
+      "source_label": "A9-structure",
+      "question": "仅结构一致性的防绕过效果",
+      "overrides": {"ssl": {"mode": "structure"}}
+    },
+    {
+      "name": "A9_fusion_only",
+      "source_label": "A9-fusion",
+      "question": "仅融合一致性的防绕过效果",
+      "overrides": {"ssl": {"mode": "fusion"}}
+    }
+  ],
+  "staged_experiments": [
+    {
+      "name": "S_A0_original_ddkac",
+      "source_label": "Prompt-A0",
+      "encoder": "dd_kac",
+      "question": "原始DD-KAC与固定折内基因图基线",
+      "overrides": {}
+    },
+    {
+      "name": "S_A1_reference_operator",
+      "source_label": "Prompt-A1",
+      "question": "仅参考度算子与DD-KAC",
+      "overrides": {"calibration_mode": "fixed", "augmentation": {"mode": "off"}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}, "loss": {"lambda_moment": 0.0, "lambda_trust": 0.0, "lambda_ssl": 0.0, "lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A2_direct_edge_gate",
+      "source_label": "Prompt-A2",
+      "question": "患者条件直接边门控对照",
+      "overrides": {"calibration_mode": "direct_edges", "augmentation": {"mode": "off"}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}, "loss": {"lambda_moment": 0.0, "lambda_trust": 0.0, "lambda_ssl": 0.0, "lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A3_inverse_calibration",
+      "source_label": "Prompt-A3",
+      "question": "Chebyshev矩逆校准与DD-KAC",
+      "overrides": {"augmentation": {"mode": "off"}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}, "loss": {"lambda_ssl": 0.0, "lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A4_random_edge_drop",
+      "source_label": "Prompt-A4",
+      "question": "逆校准加普通Bernoulli随机删边增强",
+      "overrides": {"augmentation": {"mode": "bernoulli", "krylov_enabled": false, "shared_route": false}, "ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A5_independent_views",
+      "source_label": "Prompt-A5",
+      "question": "逆校准加独立随机双视图",
+      "overrides": {"augmentation": {"mode": "independent_random", "krylov_enabled": false, "shared_route": false}, "ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A6_hessian_antithetic",
+      "source_label": "Prompt-A6",
+      "question": "Hessian反向配对增强但无Krylov约束",
+      "overrides": {"augmentation": {"mode": "hessian_antithetic", "krylov_enabled": false, "shared_route": false}, "ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A7_krylov_safe",
+      "source_label": "Prompt-A7",
+      "question": "A6加Krylov安全约束",
+      "overrides": {"augmentation": {"mode": "hessian_antithetic", "krylov_enabled": true, "shared_route": false}, "ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A8_shared_route",
+      "source_label": "Prompt-A8",
+      "question": "A7加共享频率路由",
+      "overrides": {"augmentation": {"mode": "hessian_antithetic", "krylov_enabled": true, "shared_route": true}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}, "loss": {"lambda_ssl": 0.0, "lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A9_structure_consistency",
+      "source_label": "Prompt-A9",
+      "question": "A8加结构分支一致性",
+      "overrides": {"ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}, "loss": {"lambda_id": 0.0}}
+    },
+    {
+      "name": "S_A10_identifiability",
+      "source_label": "Prompt-A10",
+      "question": "A9加随机JVP切空间可辨识性正则",
+      "overrides": {"ssl": {"mode": "structure"}, "identifiability": {"mode": "randomized"}}
+    },
+    {
+      "name": "S_Full_pc_cmka_ddkac",
+      "source_label": "Prompt-Full",
+      "question": "完整PC-CMKA-DDKAC与结构、融合、门控一致性",
+      "overrides": {}
+    }
+  ],
+  "controls": [
+    {
+      "name": "C0_original_ddkac",
+      "source_label": "main-control-0",
+      "encoder": "dd_kac",
+      "question": "固定先验图与原DD-KAC基线",
+      "overrides": {}
+    },
+    {
+      "name": "C1_patient_degree_edge_gate",
+      "source_label": "main-control-1",
+      "question": "普通患者边门控基线",
+      "overrides": {"calibration_mode": "direct_edges", "spectral": {"normalization": "patient"}, "augmentation": {"mode": "off"}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}}
+    },
+    {
+      "name": "C2_reference_degree_edge_gate",
+      "source_label": "main-control-2",
+      "question": "参考度患者算子与普通边门控",
+      "overrides": {"calibration_mode": "direct_edges", "spectral": {"normalization": "reference"}, "augmentation": {"mode": "off"}, "ssl": {"mode": "off"}, "identifiability": {"mode": "off"}}
+    },
+    {
+      "name": "C3_effective_resistance",
+      "source_label": "main-control-3",
+      "question": "经典有效电阻谱增强基线",
+      "overrides": {"calibration_mode": "fixed", "augmentation": {"mode": "effective_resistance", "krylov_enabled": false}, "ssl": {"mode": "structure"}, "identifiability": {"mode": "off"}}
+    },
+    {
+      "name": "C4_bernoulli_views",
+      "source_label": "main-control-4",
+      "question": "普通Bernoulli双视图与成熟一致性损失基线",
+      "overrides": {"calibration_mode": "fixed", "augmentation": {"mode": "bernoulli", "krylov_enabled": false}, "ssl": {"mode": "structure_fusion"}, "identifiability": {"mode": "off"}}
+    }
+  ]
+}

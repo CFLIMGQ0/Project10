@@ -22,6 +22,39 @@ from utils.hypergraph_cache import load_cache_record, subset_incidence
 
 ALL_MODALITIES = ['rna_clean.csv']  
 
+
+def fit_training_fold_survival_bins(
+    label_data,
+    train_case_ids,
+    label_col,
+    censorship_col,
+    n_bins,
+):
+    """Fit discretization boundaries using uncensored training cases only."""
+
+    training = label_data[label_data["case_id"].isin(list(train_case_ids))]
+    uncensored = training[training[censorship_col] < 1]
+    if len(uncensored) < n_bins:
+        raise ValueError("not enough uncensored training cases for survival bins")
+    _, boundaries = pd.qcut(
+        uncensored[label_col], q=n_bins, retbins=True, labels=False
+    )
+    if len(np.unique(boundaries)) != n_bins + 1:
+        raise ValueError("training-fold survival quantiles are not unique")
+    boundaries = np.asarray(boundaries, dtype=np.float64)
+    boundaries[0] = -np.inf
+    boundaries[-1] = np.inf
+    labels = pd.cut(
+        label_data[label_col],
+        bins=boundaries,
+        labels=False,
+        right=False,
+        include_lowest=True,
+    )
+    if labels.isna().any():
+        raise RuntimeError("training-fold survival bins failed to cover all cases")
+    return boundaries, labels.astype(int)
+
 class SurvivalDatasetFactory:
 
     def __init__(self,
@@ -403,6 +436,26 @@ class SurvivalDatasetFactory:
 
         assert csv_path 
         all_splits = pd.read_csv(csv_path)
+        if getattr(args, "fold_survival_bins", False):
+            train_ids = all_splits["train"].dropna().tolist()
+            bins, labels = fit_training_fold_survival_bins(
+                self.label_data,
+                train_ids,
+                self.label_col,
+                self.censorship_var,
+                self.n_bins,
+            )
+            self.bins = bins
+            self.label_data["disc_label"] = labels.to_numpy()
+            self.label_data["label"] = (
+                2 * self.label_data["disc_label"].astype(int)
+                + self.label_data[self.censorship_var].astype(int)
+            )
+            self.patient_data = {
+                "case_id": self.label_data["case_id"].to_numpy(),
+                "label": self.label_data["label"].to_numpy(),
+            }
+            self._cls_ids_prep()
         print("Defining datasets...")
         train_split, scaler = self._get_split_from_df(args, all_splits=all_splits, split_key='train', fold=fold, scaler=None)
         val_split = self._get_split_from_df(args, all_splits=all_splits, split_key='val', fold=fold, scaler=scaler)
